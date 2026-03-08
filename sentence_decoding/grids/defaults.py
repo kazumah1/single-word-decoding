@@ -93,6 +93,7 @@ default_config = {
         "merger_pos_dim": 2048,
         "merger_per_subject": True,
         "n_subjects": 500,
+        "spatial_filters": 32,
     },
     "use_transformer": True,
     "use_target_scaler": False,

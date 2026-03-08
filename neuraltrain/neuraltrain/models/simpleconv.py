@@ -28,6 +28,30 @@ from .transformer import TransformerEncoderConfig
 logger = logging.getLogger(__name__)
 
 
+class SpatialFilter(nn.Module):
+    """Learns spatial combinations of MEG/EEG channels (beamformers).
+
+    Uses a Conv2d with kernel (n_channels, 1) so each filter is a weighted
+    sum over all input channels at each time step independently — identical
+    to a learned spatial beamformer. This is the core idea from EEGNet and
+    EEG Conformer's spatial convolution step.
+
+    Input:  [batch, n_channels, time]
+    Output: [batch, n_filters, time]
+    """
+
+    def __init__(self, n_channels: int, n_filters: int) -> None:
+        super().__init__()
+        self.conv = nn.Conv2d(1, n_filters, kernel_size=(n_channels, 1), bias=False)
+        self.bn = nn.BatchNorm2d(n_filters)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.unsqueeze(1)   # [B, 1, C, T]
+        x = self.conv(x)     # [B, n_filters, 1, T]
+        x = self.bn(x)
+        return x.squeeze(2)  # [B, n_filters, T]
+
+
 class ConvSequence(nn.Module):
     def __init__(
         self,
@@ -172,6 +196,8 @@ class SimpleConvConfig(BaseModelConfig):
     merger_dropout: float = 0.2
     merger_penalty: float = 0.0
     merger_per_subject: bool = False
+    # Spatial filter (beamformer) applied before temporal convolutions
+    spatial_filters: int = 0  # 0 = disabled; e.g. 32 to learn 32 channel combinations
     # Architectural details
     dropout: float = 0.0
     dropout_rescale: bool = True
@@ -230,6 +256,11 @@ class SimpleConv(nn.Module):
                 per_subject=config.merger_per_subject,
             )
             in_channels = config.merger_channels
+
+        self.spatial_filter = None
+        if config.spatial_filters > 0:
+            self.spatial_filter = SpatialFilter(in_channels, config.spatial_filters)
+            in_channels = config.spatial_filters
 
         if config.initial_linear:
             init: list[nn.Module | tp.Callable] = [
@@ -327,6 +358,9 @@ class SimpleConv(nn.Module):
 
         if self.merger is not None:
             x = self.merger(x, subject_ids, channel_positions)
+
+        if self.spatial_filter is not None:
+            x = self.spatial_filter(x)
 
         if self.initial_linear is not None:
             x = self.initial_linear(x)
