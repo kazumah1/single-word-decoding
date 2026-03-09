@@ -151,3 +151,8 @@ neural_data/
 *.key
 secrets.json
 sentence_results/
+
+# run outputs / logs
+run_output.txt
+baseline_results.txt
+bug.tsv
