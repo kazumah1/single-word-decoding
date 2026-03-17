@@ -74,7 +74,7 @@ default_config = {
         "num_workers": NUM_CPUS,
     },
     "brain_model_config": {
-        "name": "SimpleConvTimeAgg",
+        "name": "MultiScaleSimpleConvTimeAgg",
         "time_agg_out": "att",
         "dropout_input": 0.1,
         "hidden": 160,
@@ -94,6 +94,7 @@ default_config = {
         "merger_per_subject": True,
         "n_subjects": 500,
         "spatial_filters": 32,
+        #dilation_growths=[1,2,4],
     },
     "use_transformer": True,
     "use_target_scaler": False,

@@ -20,6 +20,12 @@ from .simpleconv import (
     SimpleConvTimeAgg,
     SimpleConvTimeAggConfig,
 )
+from .multiscaleconv import (
+    MultiScaleSimpleConv,
+    MultiScaleSimpleConvConfig,
+    MultiScaleSimpleConvTimeAgg,
+    MultiScaleSimpleConvTimeAggConfig
+)
 from .transformer import TransformerEncoder, TransformerEncoderConfig
 
 # Find existing model config subclasses
