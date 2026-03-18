@@ -24,9 +24,14 @@ from .multiscaleconv import (
     MultiScaleSimpleConv,
     MultiScaleSimpleConvConfig,
     MultiScaleSimpleConvTimeAgg,
-    MultiScaleSimpleConvTimeAggConfig
+    MultiScaleSimpleConvTimeAggConfig,
 )
-from .transformer import TransformerEncoder, TransformerEncoderConfig
+from .transformer import (
+    TransformerEncoder,
+    TransformerEncoderConfig,
+    LlamaTransformerEncoder,
+    LlamaTransformerConfig,
+) 
 
 # Find existing model config subclasses
 ModelConfig = BaseModelConfig
