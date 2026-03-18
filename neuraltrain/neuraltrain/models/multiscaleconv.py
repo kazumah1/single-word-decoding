@@ -960,7 +960,7 @@ class MultiScaleSimpleConvTimeAggConfig(MultiScaleSimpleConvConfig):
     merger: bool = False
     subject_layers: bool = False
 
-    time_agg_out: tp.Literal["gap", "linear", "att"] = "gap"
+    time_agg_out: tp.Literal["gap", "linear", "att"] = "att"
     output_head_config: MlpConfig | dict[str, MlpConfig] | None = None
 
     def build(self, n_in_channels: int, n_outputs: int) -> nn.Module:
