@@ -23,7 +23,7 @@ from torchvision.ops import MLP
 
 from .base import BaseModelConfig
 from .common import BahdanauAttention, ChannelMerger, LayerScale, MlpConfig, SubjectLayers
-from .transformer import TransformerEncoderConfig
+from .transformer import LlamaTransformerConfig, TransformerEncoderConfig
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +183,7 @@ class SimpleConvConfig(BaseModelConfig):
     batch_norm: bool = False
     relu_leakiness: float = 0.0
     # Optional transformer
-    transformer_config: TransformerEncoderConfig | None = None
+    transformer_config: TransformerEncoderConfig | LlamaTransformerConfig | None = None
     # Subject specific settings
     n_subjects: int = 200
     subject_layers: bool = False
