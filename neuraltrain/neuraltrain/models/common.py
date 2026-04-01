@@ -144,7 +144,50 @@ class SubjectLayers(nn.Module):
     def __repr__(self):
         S, C, D = self.weights.shape
         return f"SubjectLayers({C}, {D}, {S})"
+    
+class SubjectLayersMLP(nn.Module):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        n_subjects: int,
+        embedding_dim: int = 384,
+        hidden_dim: int = 128,
+        mode: tp.Literal["gather", "for_loop"] = "gather",
+    ):
+        super().__init__()
 
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+
+        self.subject_embeddings = nn.Embedding(n_subjects, embedding_dim)
+        self.mlp = nn.Sequential(
+            nn.Linear(embedding_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, in_channels * out_channels)
+        )
+        self.mode = mode
+    
+    def forward(
+        self,
+        x: torch.Tensor,  # (batch_size, in_channels, n_times)
+        subjects: torch.Tensor,  # (batch_size,)
+    ) -> torch.Tensor:  # (batch_size, out_channels, n_times)
+        N, C, D = self.subject_embeddings.num_embeddings, self.in_channels, self.out_channels
+        assert (
+            subjects.max() < N
+        ), "Subject index higher than number of subjects used to initialize the weights."
+
+        if self.mode == "gather":
+            weights = self.mlp(self.subject_embeddings(subjects)).view(-1, C, D)
+            out = torch.einsum("bct,bcd->bdt", x, weights)
+        elif self.mode == "for_loop":
+            weights = self.mlp(self.subject_embeddings(subjects)).view(-1, C, D)
+            out = torch.einsum("bct,bcd->bdt", x, weights)
+        else:
+            raise NotImplementedError()
+        
+        return out
 
 class FourierEmb(nn.Module):
     """

@@ -45,7 +45,7 @@ from torch import nn
 from torchvision.ops import MLP
 
 from .base import BaseModelConfig
-from .common import BahdanauAttention, ChannelMerger, LayerScale, MlpConfig, SubjectLayers
+from .common import BahdanauAttention, ChannelMerger, LayerScale, MlpConfig, SubjectLayers, SubjectLayersMLP
 from .transformer import LlamaTransformerConfig, TransformerEncoderConfig
 
 logger = logging.getLogger(__name__)
@@ -570,8 +570,8 @@ class SimpleConv(nn.Module):
             dim = {"hidden": config.hidden, "input": in_channels}[
                 config.subject_layers_dim
             ]
-            self.subject_layers = SubjectLayers(
-                in_channels, dim, config.n_subjects, config.subject_layers_id
+            self.subject_layers = SubjectLayersMLP(
+                in_channels, dim, config.n_subjects
             )
             in_channels = dim
 
