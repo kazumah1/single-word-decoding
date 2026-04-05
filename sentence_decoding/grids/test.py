@@ -15,7 +15,7 @@ default_params = {
     "infra.cluster": None,
     "data.n_timelines": 1,
     "data.n_subjects": 10,
-    "save_checkpoints": False,
+    "save_checkpoints": True,
     # "brain_model_config.time_agg_out": "eegnet",
     # "data.feature.model_name": "t5-large",
     # "loss": {"name": "MSELoss", "kwargs": {"reduction": "mean"}},
