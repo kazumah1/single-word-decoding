@@ -50,6 +50,18 @@ from .transformer import LlamaTransformerConfig, TransformerEncoderConfig
 
 logger = logging.getLogger(__name__)
 
+def MEG_mask(x: torch.Tensor, mask_ratio: float, mask_span: int):
+        B, C, T = x.shape
+        n_masked_segments = int(T / mask_span * mask_ratio)
+        masker = torch.zeros(B, T, dtype=torch.bool, device=x.device)
+        
+        for b in range(B):
+            start = torch.randint(0, T - mask_span + 1, (n_masked_segments,), device=x.device)
+            for s in start:
+                masker[b, s : s + mask_span] = True
+
+        x_masked = x.masked_fill(masker.unsqueeze(1), value=0)
+        return x_masked, masker
 
 # ---------------------------------------------------------------------------
 # SpatialFilter  (unchanged)
@@ -433,6 +445,7 @@ class SimpleConvConfig(BaseModelConfig):
 # MultiScaleSimpleConvConfig  (NEW)
 # ---------------------------------------------------------------------------
 
+
 class MultiScaleSimpleConvConfig(SimpleConvConfig):
     """Configuration for ``MultiScaleSimpleConv``.
 
@@ -467,6 +480,14 @@ class MultiScaleSimpleConvConfig(SimpleConvConfig):
 
     def build(self, n_in_channels: int, n_outputs: int) -> nn.Module:
         return MultiScaleSimpleConv(n_in_channels, n_outputs, config=self)
+
+# ---------------------------------------------------------------------------
+# PretrainConfig: uhhhhhhhhhhh yeah
+# ---------------------------------------------------------------------------
+
+class PretrainConfig(MultiScaleSimpleConvConfig):
+     def build(self, n_in_channels: int, n_outputs: int) -> nn.Module:
+        return MultiScaleSimpleConvPretrain(n_in_channels, n_outputs, config=self)
 
 
 # ---------------------------------------------------------------------------
@@ -828,6 +849,40 @@ class MultiScaleSimpleConv(SimpleConv):
             out_channels=self.backbone_out_channels,
             **branch_params,
         )
+
+
+# ---------------------------------------------------------------------------
+# MultiScaleSimpleConv  (NEW)
+# ---------------------------------------------------------------------------
+
+class MultiScaleSimpleConvPretrain(MultiScaleSimpleConv):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        config: PretrainConfig | None = None,
+    ) -> None:
+        config = config if config is not None else MultiScaleSimpleConvConfig()
+
+        # Store dilation_growths on the instance BEFORE calling super().__init__().
+        # SimpleConv.__init__ calls self._build_encoder(), which is already
+        # overridden on this class and needs to know the dilation schedule.
+        # Because __new__ has already created the object at this point, setting
+        # an attribute here is safe even though super().__init__() has not run.
+        super().__init__(in_channels=in_channels, out_channels=out_channels, config=config)
+        
+    def pretrain_forward(
+        self,
+        x: torch.Tensor,
+        subject_ids: torch.Tensor | None = None,
+        channel_positions: torch.Tensor | None = None
+        ) -> torch.Tensor:
+        
+
+
+
+        
+
 
 
 # ---------------------------------------------------------------------------
