@@ -57,8 +57,8 @@ default_config = {
         },
         "feature": {
             "name": "HuggingFaceText",
-            # "model_name": "facebook/opt-2.7b",
-            "model_name": "t5-large",
+            # "model_name": "meta-llama/Meta-Llama-3.1-8B",
+            "model_name": "t5-large", # COMMENT THIS LINE AND UNCOMMENT LINE ABOVE FOR LLAMA 3.1
             "aggregation": "trigger",
             "layers": 0.5,
             "infra": {

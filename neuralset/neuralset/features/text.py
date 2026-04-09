@@ -362,19 +362,27 @@ class HuggingFaceText(BaseStatic):
                 from transformers import AutoModelForTextEncoding
 
                 Model = AutoModelForTextEncoding
-            elif "Phi-3" in self.model_name:
+            elif "Phi-3" in self.model_name or any(
+                k in self.model_name for k in ("llama", "Llama")
+            ):
                 from transformers import AutoModelForCausalLM
 
                 Model = AutoModelForCausalLM
             else:
                 Model = AutoModel
             # instantiate
+            _is_llama = any(k in self.model_name for k in ("llama", "Llama"))
             if self.device == "accelerate":
                 kwargs = {"device_map": "auto", "torch_dtype": torch.float16}
+            elif _is_llama:
+                # Llama 3.1 8B requires bfloat16 to fit in GPU memory; also
+                # enables device_map="auto" so it spreads across available GPUs
+                # or falls back gracefully to CPU offloading.
+                kwargs = {"device_map": "auto", "torch_dtype": torch.bfloat16}
             self._model = Model.from_pretrained(self.model_name, **kwargs)
             if not self.pretrained:
                 self._model = AutoModel.from_config(self._model.config)
-            if self.device != "accelerate":
+            if self.device != "accelerate" and not _is_llama:
                 self._model.to(self.device)
             self._model.eval()
             # tokens
