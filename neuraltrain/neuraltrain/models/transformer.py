@@ -10,10 +10,17 @@ Transformer models
 
 import logging
 import typing as tp
+import warnings
 
 import torch
 from torch import nn
-from x_transformers import Encoder  # type: ignore
+with warnings.catch_warnings():
+    warnings.filterwarnings(
+        "ignore",
+        message=r"`torch\.cuda\.amp\.autocast",
+        category=FutureWarning,
+    )
+    from x_transformers import Encoder  # type: ignore
 
 from .base import BaseModelConfig
 
