@@ -57,8 +57,8 @@ default_config = {
         },
         "feature": {
             "name": "HuggingFaceText",
-            # "model_name": "meta-llama/Meta-Llama-3.1-8B",
-            "model_name": "t5-large", # COMMENT THIS LINE AND UNCOMMENT LINE ABOVE FOR LLAMA 3.1
+            "model_name": "meta-llama/Meta-Llama-3.1-8B",
+            #"model_name": "t5-large", # COMMENT THIS LINE AND UNCOMMENT LINE ABOVE FOR LLAMA 3.1
             "aggregation": "trigger",
             "layers": 0.5,
             "infra": {
@@ -98,7 +98,13 @@ default_config = {
     },
     "use_transformer": True,
     "use_target_scaler": False,
-    "transformer_config": {"name": "TransformerEncoder", "depth": 16, "heads": 16},
+    "transformer_config": {
+        "name": "LlamaTransformer",
+        "model_name": "meta-llama/Meta-Llama-3.1-8B",
+        "num_layers": 32,
+        "freeze_pretrained": True,
+        "torch_dtype": "bfloat16",
+    },
     "loss": {
         "name": "SigLip",
     },
