@@ -160,7 +160,11 @@ class TestRetrieval(Callback):
             ]
             y_pred = torch.cat(full["y_pred"], dim=0)
             y_true = torch.cat(full["y_true"], dim=0)
+            # Save full-dataset refs before sentence-metric subsetting (used for figures)
+            y_pred_full, y_true_full = y_pred, y_true
+            groups_pred_full, subjects_pred_full = groups_pred, subjects_pred
 
+            all_retrieval_out = {}
             for retrieval_set_size in self.retrieval_set_sizes:
                 out = self._get_retrieval_metrics(
                     y_pred,
@@ -170,6 +174,7 @@ class TestRetrieval(Callback):
                     retrieval_metrics,
                     retrieval_set_size=retrieval_set_size,
                 )
+                all_retrieval_out.update(out)
                 for key, value in out.items():
                     key += f"_{dataloader_idx}"
                     pl_module.log(key, value)
@@ -180,7 +185,7 @@ class TestRetrieval(Callback):
                 y_pred, y_true = y_pred[idx], y_true[idx]
                 groups_pred = [groups_pred[i] for i in idx]
                 sentence_uids = [sentence_uids[i] for i in idx]
-            out_metrics, true_sentences, pred_sentences, corr_sentences = (
+            out_metrics, true_sentences, pred_sentences, corr_sentences, sentence_accs = (
                 self._get_sentence_metrics(
                     y_pred,
                     y_true,
@@ -209,6 +214,14 @@ class TestRetrieval(Callback):
                     f.write(f"Corr: {corr}\n")
                     f.write("\n")
             f.close()
+            try:
+                self._save_figures(
+                    trainer, step_name, dataloader_idx,
+                    y_pred_full, y_true_full, groups_pred_full, subjects_pred_full,
+                    all_retrieval_out, sentence_accs,
+                )
+            except Exception:
+                pass
 
     def _get_sentence_metrics(
         self,
@@ -274,7 +287,7 @@ class TestRetrieval(Callback):
                     res = torch.mean(res["f1"])
                 out[metric_name] = res
 
-        return out, true_sentences, pred_sentences, corr_sentences
+        return out, true_sentences, pred_sentences, corr_sentences, accs
 
     @classmethod
     def _get_retrieval_metrics(
@@ -333,6 +346,199 @@ class TestRetrieval(Callback):
                 )
                 out[metric_name + "_macro"] = macro_average
         return out
+
+    # ------------------------------------------------------------------
+    # Figure generation
+    # ------------------------------------------------------------------
+
+    def _save_figures(
+        self,
+        trainer,
+        step_name,
+        dataloader_idx,
+        y_pred,
+        y_true,
+        groups_pred,
+        subjects_pred,
+        all_retrieval_out,
+        sentence_accs,
+    ):
+        """Generate and save diagnostic figures alongside the existing outputs."""
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+        except ImportError:
+            return
+
+        if not hasattr(trainer.logger, "save_dir") or trainer.logger.save_dir is None:
+            return
+
+        fig_dir = os.path.join(trainer.logger.save_dir, "figures")
+        os.makedirs(fig_dir, exist_ok=True)
+        prefix = f"{step_name}_{dataloader_idx}"
+
+        try:
+            self._fig_retrieval_bar_chart(fig_dir, prefix, all_retrieval_out, plt)
+        except Exception:
+            pass
+        try:
+            self._fig_similarity_heatmap(fig_dir, prefix, y_pred, y_true, groups_pred, plt)
+        except Exception:
+            pass
+        try:
+            self._fig_per_word_rank(fig_dir, prefix, y_pred, y_true, groups_pred, plt)
+        except Exception:
+            pass
+        if sentence_accs:
+            try:
+                self._fig_sentence_accuracy(fig_dir, prefix, sentence_accs, plt)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _fig_retrieval_bar_chart(fig_dir, prefix, all_retrieval_out, plt):
+        """Bar chart of all retrieval metrics (top-k accuracy, median rank) per size setting."""
+        scalar_metrics = {}
+        for k, v in all_retrieval_out.items():
+            try:
+                scalar_metrics[k] = float(v)
+            except (TypeError, ValueError):
+                pass
+        if not scalar_metrics:
+            return
+
+        def _shorten(k):
+            # e.g. "val_retrieval_acc10_instance-agg_size=250_macro" -> "acc10_instance-agg_size=250_macro"
+            return k.split("_retrieval_", 1)[-1] if "_retrieval_" in k else k
+
+        keys = list(scalar_metrics.keys())
+        values = [scalar_metrics[k] for k in keys]
+        short_keys = [_shorten(k) for k in keys]
+
+        fig, ax = plt.subplots(figsize=(max(8, len(keys) * 0.7), 5))
+        bars = ax.bar(range(len(keys)), values, color="steelblue", alpha=0.8)
+        ax.set_xticks(range(len(keys)))
+        ax.set_xticklabels(short_keys, rotation=45, ha="right", fontsize=8)
+        ax.set_ylabel("Value")
+        ax.set_title(f"{prefix} — Retrieval Metrics")
+        ax.bar_label(bars, fmt="%.3f", fontsize=7, padding=2)
+        plt.tight_layout()
+        plt.savefig(
+            os.path.join(fig_dir, f"{prefix}_retrieval_metrics.png"),
+            dpi=100, bbox_inches="tight",
+        )
+        plt.close(fig)
+
+    @staticmethod
+    def _fig_similarity_heatmap(fig_dir, prefix, y_pred, y_true, groups_pred, plt):
+        """Cosine-similarity heatmap between sampled predictions and unique word embeddings."""
+        agg_y_true, agg_groups_true = agg_per_group(y_true, groups=groups_pred, agg_func="first")
+        word_to_agg_idx = {w: i for i, w in enumerate(agg_groups_true)}
+
+        # First-occurrence prediction index per unique word
+        group_to_pred_idx: dict = {}
+        for i, g in enumerate(groups_pred):
+            if g not in group_to_pred_idx:
+                group_to_pred_idx[g] = i
+
+        # Subsample up to 50 words, reproducibly
+        n_words = min(50, len(agg_groups_true))
+        rng = np.random.default_rng(seed=0)
+        chosen = list(rng.choice(len(agg_groups_true), n_words, replace=False))
+        selected_words = [
+            agg_groups_true[i] for i in chosen if agg_groups_true[i] in group_to_pred_idx
+        ]
+
+        pred_indices = [group_to_pred_idx[w] for w in selected_words]
+        agg_indices = [word_to_agg_idx[w] for w in selected_words]
+
+        sample_y_pred = y_pred[pred_indices]
+        sample_y_true = agg_y_true[agg_indices]
+        scores = Rank._compute_sim(sample_y_pred, sample_y_true).numpy()
+
+        fig, ax = plt.subplots(figsize=(11, 9))
+        im = ax.imshow(scores, aspect="auto", cmap="viridis")
+        ax.set_xticks(range(len(selected_words)))
+        ax.set_yticks(range(len(selected_words)))
+        ax.set_xticklabels(selected_words, rotation=90, fontsize=6)
+        ax.set_yticklabels(selected_words, fontsize=6)
+        ax.set_xlabel("Candidate word (true embedding)")
+        ax.set_ylabel("Query word (predicted embedding)")
+        ax.set_title(f"{prefix} — Cosine Similarity Matrix (n={len(selected_words)} words)")
+        plt.colorbar(im, ax=ax, label="Cosine similarity")
+        plt.tight_layout()
+        plt.savefig(
+            os.path.join(fig_dir, f"{prefix}_similarity_matrix.png"),
+            dpi=100, bbox_inches="tight",
+        )
+        plt.close(fig)
+
+    @staticmethod
+    def _fig_per_word_rank(fig_dir, prefix, y_pred, y_true, groups_pred, plt):
+        """Horizontal bar charts of the best- and worst-decoded words by median rank."""
+        agg_y_true, agg_groups_true = agg_per_group(y_true, groups=groups_pred, agg_func="first")
+        group_to_idx = {w: i for i, w in enumerate(agg_groups_true)}
+
+        scores = Rank._compute_sim(y_pred, agg_y_true)  # (N, V)
+        sorted_cols = scores.argsort(dim=1, descending=True)  # (N, V)
+
+        word_ranks: dict = defaultdict(list)
+        for i, g in enumerate(groups_pred):
+            if g not in group_to_idx:
+                continue
+            correct_idx = group_to_idx[g]
+            rank = (sorted_cols[i] == correct_idx).nonzero(as_tuple=True)[0].item() + 1
+            word_ranks[g].append(rank)
+
+        word_median = {w: float(np.median(r)) for w, r in word_ranks.items()}
+        sorted_words = sorted(word_median.items(), key=lambda x: x[1])
+        n_show = min(20, max(1, len(sorted_words) // 2))
+        best = sorted_words[:n_show]
+        worst = sorted_words[-n_show:][::-1]
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, max(4, n_show * 0.35 + 1)))
+        for ax, data, color, title in [
+            (ax1, best, "seagreen", f"Best decoded (n={n_show})"),
+            (ax2, worst, "firebrick", f"Worst decoded (n={n_show})"),
+        ]:
+            if not data:
+                continue
+            words_list, ranks_list = zip(*data)
+            ax.barh(range(len(words_list)), ranks_list, color=color, alpha=0.75)
+            ax.set_yticks(range(len(words_list)))
+            ax.set_yticklabels(words_list, fontsize=8)
+            ax.set_xlabel("Median Rank")
+            ax.set_title(title)
+            ax.invert_yaxis()
+
+        plt.suptitle(f"{prefix} — Per-word Median Rank", fontsize=11)
+        plt.tight_layout()
+        plt.savefig(
+            os.path.join(fig_dir, f"{prefix}_per_word_rank.png"),
+            dpi=100, bbox_inches="tight",
+        )
+        plt.close(fig)
+
+    @staticmethod
+    def _fig_sentence_accuracy(fig_dir, prefix, sentence_accs, plt):
+        """Histogram of per-sentence word-level accuracy."""
+        accs = np.array(sentence_accs, dtype=float)
+        mean_acc = float(np.mean(accs))
+        fig, ax = plt.subplots(figsize=(7, 4))
+        ax.hist(accs, bins=min(20, len(accs)), color="steelblue", alpha=0.8, edgecolor="white")
+        ax.axvline(mean_acc, color="firebrick", linestyle="--", linewidth=1.5,
+                   label=f"Mean: {mean_acc:.2f}")
+        ax.set_xlabel("Word-level Accuracy per Sentence")
+        ax.set_ylabel("Count")
+        ax.set_title(f"{prefix} — Sentence Accuracy Distribution")
+        ax.legend(fontsize=9)
+        plt.tight_layout()
+        plt.savefig(
+            os.path.join(fig_dir, f"{prefix}_sentence_accuracy.png"),
+            dpi=100, bbox_inches="tight",
+        )
+        plt.close(fig)
 
     #     # log table to wandb if possible
     #     if retrieval_set_size is not None:
