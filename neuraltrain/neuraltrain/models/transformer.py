@@ -212,6 +212,11 @@ class LlamaTransformerEncoder(nn.Module):
         self.layers = nn.ModuleList(llama_model.model.layers[:n_keep])
         self.norm   = llama_model.model.norm
 
+        # transformers >= 4.45 moved rotary_emb to a shared model-level module
+        # rather than per-layer.  Extract it here so forward() can use it when
+        # layer.self_attn.rotary_emb no longer exists.
+        self.rotary_emb = getattr(llama_model.model, "rotary_emb", None)
+
         # Free the embedding table, LM head and any remaining decoder blocks
         del llama_model
  
@@ -314,18 +319,33 @@ class LlamaTransformerEncoder(nn.Module):
         # ---- cache_position (required by transformers >= 4.40) ----------- #
         cache_position = torch.arange(T, device=x.device)
 
+        # ---- compute position embeddings once -------------------------------- #
+        # transformers >= 4.45: shared rotary_emb lives on the model, not on
+        # each decoder layer.  Compute (cos, sin) once and reuse across layers.
+        # transformers < 4.45: rotary_emb lives on layer.self_attn; compute it
+        # inside the loop (legacy path).  If neither exists the very-old API
+        # path (no position_embeddings kwarg) is used as a final fallback.
+        if self.rotary_emb is not None:
+            shared_position_embeddings = self.rotary_emb(x, position_ids)
+        else:
+            shared_position_embeddings = None
+
         # ---- run through LLaMA decoder layers ----------------------------- #
         for layer in self.layers:
-            # Compute position embeddings using THIS layer's own rotary_emb so
-            # that the cos/sin shape is guaranteed to match the layer's internal
-            # apply_rotary_pos_emb expectations regardless of transformers version.
-            try:
-                position_embeddings = layer.self_attn.rotary_emb(x, position_ids)
-            except AttributeError:
-                position_embeddings = None
+            # Resolve position embeddings for this layer.
+            if shared_position_embeddings is not None:
+                # New API (>= 4.45): use the shared (cos, sin) tuple.
+                position_embeddings = shared_position_embeddings
+            else:
+                # Old API (< 4.45): each layer has its own rotary_emb.
+                try:
+                    position_embeddings = layer.self_attn.rotary_emb(x, position_ids)
+                except AttributeError:
+                    position_embeddings = None
 
             # Support both older (<4.40) and newer (>=4.45) transformers APIs
-            try:
+            if position_embeddings is not None:
+                # Newer transformers: pass pre-computed (cos, sin)
                 layer_out = layer(
                     x,
                     attention_mask=attn_mask_4d,
@@ -334,14 +354,25 @@ class LlamaTransformerEncoder(nn.Module):
                     cache_position=cache_position,
                     position_embeddings=position_embeddings,
                 )
-            except TypeError:
-                # Older transformers: no cache_position / position_embeddings
-                layer_out = layer(
-                    x,
-                    attention_mask=attn_mask_4d,
-                    position_ids=position_ids,
-                    use_cache=False,
-                )
+            else:
+                try:
+                    # Mid-range transformers: cache_position but no
+                    # position_embeddings kwarg
+                    layer_out = layer(
+                        x,
+                        attention_mask=attn_mask_4d,
+                        position_ids=position_ids,
+                        use_cache=False,
+                        cache_position=cache_position,
+                    )
+                except TypeError:
+                    # Oldest transformers: no cache_position either
+                    layer_out = layer(
+                        x,
+                        attention_mask=attn_mask_4d,
+                        position_ids=position_ids,
+                        use_cache=False,
+                    )
             x = layer_out[0]
  
         # ---- final LLaMA RMSNorm ------------------------------------------ #
