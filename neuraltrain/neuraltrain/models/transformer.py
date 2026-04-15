@@ -208,10 +208,9 @@ class LlamaTransformerEncoder(nn.Module):
                 f"num_layers={n_keep} exceeds the model's {n_total_layers} layers."
             )
  
-        # Decoder blocks, the shared final RMSNorm, and rotary embeddings
-        self.layers     = nn.ModuleList(llama_model.model.layers[:n_keep])
-        self.norm       = llama_model.model.norm
-        self.rotary_emb = llama_model.model.rotary_emb
+        # Decoder blocks and the shared final RMSNorm
+        self.layers = nn.ModuleList(llama_model.model.layers[:n_keep])
+        self.norm   = llama_model.model.norm
 
         # Free the embedding table, LM head and any remaining decoder blocks
         del llama_model
@@ -315,12 +314,16 @@ class LlamaTransformerEncoder(nn.Module):
         # ---- cache_position (required by transformers >= 4.40) ----------- #
         cache_position = torch.arange(T, device=x.device)
 
-        # ---- rotary position embeddings (required by transformers >= 4.45) #
-        # rotary_emb expects (hidden_states, position_ids) and returns (cos, sin)
-        position_embeddings = self.rotary_emb(x, position_ids)
-
         # ---- run through LLaMA decoder layers ----------------------------- #
         for layer in self.layers:
+            # Compute position embeddings using THIS layer's own rotary_emb so
+            # that the cos/sin shape is guaranteed to match the layer's internal
+            # apply_rotary_pos_emb expectations regardless of transformers version.
+            try:
+                position_embeddings = layer.self_attn.rotary_emb(x, position_ids)
+            except AttributeError:
+                position_embeddings = None
+
             # Support both older (<4.40) and newer (>=4.45) transformers APIs
             try:
                 layer_out = layer(
