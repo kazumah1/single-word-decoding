@@ -492,6 +492,7 @@ class HuggingFaceText(BaseStatic):
                 word_state = self.aggregate_tokens(word_state)  # layers x embd
 
                 if self.cache_all_layers:
-                    yield word_state.cpu().numpy()
+                    yield word_state.cpu().float().numpy()
                 else:
-                    yield self.aggregate_layers(word_state).cpu().numpy()
+                    yield self.aggregate_layers(word_state).cpu().float().numpy()
+                    
