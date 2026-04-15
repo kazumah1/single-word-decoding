@@ -441,7 +441,8 @@ class HuggingFaceText(BaseStatic):
         # Processing the data in batches
         if len(dloader) > 1:
             dloader = tqdm.tqdm(dloader, desc="Computing word embeddings")  # type: ignore
-        device = "auto" if self.device == "accelerate" else self.device
+        _is_llama = any(k in self.model_name for k in ("llama", "Llama"))
+        device = "auto" if self.device == "accelerate" or _is_llama else self.device
         if device == "auto":
             device = "cuda" if torch.cuda.is_available() else "cpu"
         for target_words, context in dloader:
