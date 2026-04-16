@@ -325,12 +325,16 @@ class LlamaTransformerEncoder(nn.Module):
         # ---- cache_position (required by transformers >= 4.40) ----------- #
         cache_position = torch.arange(T, device=x.device)
 
+        # ---- compute position embeddings ---------------------------------- #
+        # transformers 5.0 made position_embeddings a required kwarg: the
+        # attention module unconditionally does `cos, sin = position_embeddings`
+        # with no internal fallback.  Compute once here and pass to every layer.
+        if self.rotary_emb is not None:
+            position_embeddings = self.rotary_emb(x, position_ids)
+        else:
+            position_embeddings = None
+
         # ---- run through LLaMA decoder layers ----------------------------- #
-        # Each layer computes its own position embeddings internally via the
-        # rotary_emb that was re-attached in __init__.  Passing position_ids
-        # is sufficient; externally pre-computing (cos, sin) and forwarding
-        # them as position_embeddings breaks under transformers >= 5.0 because
-        # the expected shape/format of that tuple changed.
         for layer in self.layers:
             try:
                 layer_out = layer(
@@ -339,14 +343,25 @@ class LlamaTransformerEncoder(nn.Module):
                     position_ids=position_ids,
                     use_cache=False,
                     cache_position=cache_position,
+                    position_embeddings=position_embeddings,
                 )
             except TypeError:
-                layer_out = layer(
-                    x,
-                    attention_mask=attn_mask_4d,
-                    position_ids=position_ids,
-                    use_cache=False,
-                )
+                # Older transformers: unknown kwargs — try progressively simpler
+                try:
+                    layer_out = layer(
+                        x,
+                        attention_mask=attn_mask_4d,
+                        position_ids=position_ids,
+                        use_cache=False,
+                        cache_position=cache_position,
+                    )
+                except TypeError:
+                    layer_out = layer(
+                        x,
+                        attention_mask=attn_mask_4d,
+                        position_ids=position_ids,
+                        use_cache=False,
+                    )
             x = layer_out[0]
  
         # ---- final LLaMA RMSNorm ------------------------------------------ #
