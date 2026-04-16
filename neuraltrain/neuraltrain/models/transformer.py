@@ -127,7 +127,7 @@ class LlamaTransformerConfig(BaseModelConfig):
     model_name: str = "meta-llama/Meta-Llama-3.1-8B"
     num_layers: int | None = None       # None → use all 32 layers
     freeze_pretrained: bool = True
-    torch_dtype: str = "bfloat16"       # "float32" | "float16" | "bfloat16"
+    torch_dtype: str = "float32"       # "float32" | "float16" | "bfloat16"
  
     def build(self, dim: int) -> nn.Module:
         return LlamaTransformerEncoder(dim, config=self)
