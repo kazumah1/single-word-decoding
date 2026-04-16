@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# SpatialFilter  (unchanged)
+# SpatialFilter
 # ---------------------------------------------------------------------------
 
 class SpatialFilter(nn.Module):
@@ -237,7 +237,7 @@ class ConvSequence(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# MultiScaleConvSequence  (NEW)
+# MultiScaleConvSequence 
 # ---------------------------------------------------------------------------
 
 class MultiScaleConvSequence(nn.Module):
