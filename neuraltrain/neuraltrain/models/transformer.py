@@ -362,7 +362,7 @@ class LlamaTransformerEncoder(nn.Module):
                         position_ids=position_ids,
                         use_cache=False,
                     )
-            x = layer_out[0]
+            x = layer_out[0] if isinstance(layer_out, tuple) else layer_out
  
         # ---- final LLaMA RMSNorm ------------------------------------------ #
         x = self.norm(x)
