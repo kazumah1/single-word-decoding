@@ -31,7 +31,7 @@ default_params = {
 }
 default = update_config(default_config, default_params)
 
-params = {"data.dataset": "Gwilliams2022"}
+params = {"data.dataset": "Gwilliams2022", "pretrain_mode": "simclr"}
 
 if __name__ == "__main__":
     config = update_config(default, params)

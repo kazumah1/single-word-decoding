@@ -23,6 +23,8 @@ from .multiscaleconv import (
     MultiScaleSimpleConvConfig,
     MultiScaleSimpleConvTimeAgg,
     MultiScaleSimpleConvTimeAggConfig,
+    MultiScaleSimpleConvPretrain,
+    MultiScaleSimpleConvPretrainConfig,
 )
 from .transformer import (
     TransformerEncoder,

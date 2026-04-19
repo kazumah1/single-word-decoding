@@ -178,18 +178,16 @@ class BrainModule(pl.LightningModule):
                 "scheduler": torch.optim.lr_scheduler.CosineAnnealingLR(
                     optimizer, T_max=self.trainer_config.n_epochs
                 ),
-                "monitor": "val_loss",
+                "monitor": "val_pretrain_cnn_loss",
                 "interval": "epoch",
                 "frequency": 1,
             },
         }
-
 class MAEEGModule(pl.LightningModule):
     def __init__(
         self,
         model,
         loss,
-        metrics,
         trainer_config,
         checkpoint_path=None,
     ):
@@ -240,6 +238,80 @@ class MAEEGModule(pl.LightningModule):
         _, y_pred, y_true = self._run_step(batch, step_name="val")
         return y_pred, y_true
 
+    def configure_optimizers(self):
+        optimizer = optim.AdamW(
+            self.parameters(),
+            lr=self.trainer_config.lr,
+            weight_decay=self.trainer_config.weight_decay,
+        )
+
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": torch.optim.lr_scheduler.CosineAnnealingLR(
+                    optimizer, T_max=self.trainer_config.n_epochs
+                ),
+                "monitor": "val_loss",
+                "interval": "epoch",
+                "frequency": 1,
+            },
+        }
+    
+class SimCLRModule(pl.LightningModule):
+    def __init__(
+        self,
+        model,
+        loss,
+        trainer_config,
+        checkpoint_path=None,
+    ):
+        super().__init__()
+        self.model = model
+        self.trainer_config = trainer_config
+
+        self.checkpoint_path = checkpoint_path
+        self.loss = loss
+    
+    def cnn_forward(self, batch):
+        view1, view2 = batch
+        x1 = view1.data["neuro"]
+        x2 = view2.data["neuro"]
+        
+        subject_ids = view1.data["subject_id"] if "subject_id" in view1.data else None
+        channel_positions = (
+            view1.data["channel_positions"] if "channel_positions" in view1.data else None
+        )
+
+        out1 = self.model.forward(x1, subject_ids, channel_positions)
+        out2 = self.model.forward(x2, subject_ids, channel_positions)
+        return out1, out2
+    
+    def _run_step(self, batch, step_name):
+
+        out1, out2 = self.cnn_forward(batch)
+        out1 = out1 / out1.norm(dim=1, keepdim=True)
+        out2 = out2 / out2.norm(dim=1, keepdim=True)
+        loss = self.loss(out1, out2)
+
+        log_kwargs = {
+            "on_step": False,
+            "on_epoch": True,
+            "logger": True,
+            "prog_bar": True,
+            "batch_size": out1.shape[0],
+        }
+
+        self.log(f"{step_name}_pretrain_cnn_loss", loss, **log_kwargs)
+        return loss, out1, out2
+
+    def training_step(self, batch: tuple[SegmentData, SegmentData], batch_idx: int, dataloader_idx: int = 0):
+        loss, _, _ = self._run_step(batch, step_name="train")
+        return loss
+
+    def validation_step(self, batch, batch_idx: int, dataloader_idx: int = 0):
+        loss, _, _ = self._run_step(batch, step_name="val")
+        return loss
+    
     def configure_optimizers(self):
         optimizer = optim.AdamW(
             self.parameters(),
