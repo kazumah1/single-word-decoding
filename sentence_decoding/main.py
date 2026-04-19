@@ -38,6 +38,8 @@ from torch.utils.data import DataLoader
 torch.serialization.add_safe_globals([torch.nn.parameter.UninitializedParameter])
 from tqdm import tqdm
 
+torch.set_float32_matmul_precision("high")
+torch.backends.cudnn.benchmark = True
 import neuralset as ns
 from neuralset.infra.task import TaskInfra
 from neuralset.splitting import DeterministicSplitter, set_event_split

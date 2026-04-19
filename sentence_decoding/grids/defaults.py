@@ -29,7 +29,7 @@ default_config = {
     },
     "trainer_config": {
         "n_epochs": 50,  # 200
-        "transformer_start_epoch": 0,
+        "transformer_start_epoch": 3,
         "monitor": "val_retrieval_acc10_size=all_macro_0",
         "patience": 10,
         "lr": 1e-4,
@@ -70,7 +70,7 @@ default_config = {
         },
         "start": 0.0,
         "duration": 3.0,
-        "batch_size": 128,
+        "batch_size": 64,
         "num_workers": NUM_CPUS,
     },
     "brain_model_config": {
@@ -101,7 +101,7 @@ default_config = {
     "transformer_config": {
         "name": "LlamaTransformer",
         "model_name": "meta-llama/Meta-Llama-3.1-8B",
-        "num_layers": 32,
+        "num_layers": 12,
         "freeze_pretrained": True,
         "torch_dtype": "bfloat16",
     },
