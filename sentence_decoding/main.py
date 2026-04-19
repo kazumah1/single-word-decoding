@@ -20,7 +20,7 @@ from lightning.pytorch.callbacks import (
     LearningRateMonitor,
     ModelCheckpoint,
 )
-from sentence_decoding.callbacks import InitialEvaluation, TestRetrieval
+from sentence_decoding.callbacks import InitialEvaluation, TestRetrieval, TrainingCurves
 from sentence_decoding.pl_module import BrainModule
 from sentence_decoding.utils import (
     LANGUAGES,
@@ -403,6 +403,7 @@ class Experiment(pydantic.BaseModel):
             # RichProgressBar(leave=True),
             ShuffleSentences(),
             InitialEvaluation(),
+            TrainingCurves(),
         ]
         if self.save_checkpoints:
             callbacks.append(
