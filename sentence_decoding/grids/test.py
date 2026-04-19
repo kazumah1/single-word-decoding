@@ -13,9 +13,11 @@ from .defaults import default_config
 
 default_params = {
     "infra.cluster": None,
+    "use_wandb": False,
     "data.n_timelines": 1,
     "data.n_subjects": 10,
     "save_checkpoints": True,
+    "trainer_config.n_epochs": 3,
     # "brain_model_config.time_agg_out": "eegnet",
     # "data.feature.model_name": "t5-large",
     # "loss": {"name": "MSELoss", "kwargs": {"reduction": "mean"}},
@@ -41,7 +43,7 @@ if __name__ == "__main__":
     if os.path.exists(folder):
         import shutil
 
-        shutil.rmtree(folder)
+        shutil.rmtree(folder, ignore_errors=True)
     task = Exp(
         **config,
     )

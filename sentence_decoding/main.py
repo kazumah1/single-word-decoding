@@ -238,15 +238,19 @@ class Data(pydantic.BaseModel):
                         segments,
                         transforms={"neuro": ContrastiveAugment()},
                     )
+                    loaders[split] = DataLoader(
+                        dataset, collate_fn=dataset.collate_fn,
+                        **{**kwargs, "shuffle": True}
+                    )
                 else:
                     dataset = ShuffledSegmentDataset(
                         features,
                         segments,
                         remove_incomplete_segments=True,
                     )
-                loaders[split] = DataLoader(
-                    dataset, collate_fn=dataset.collate_fn, **kwargs
-                )
+                    loaders[split] = DataLoader(
+                        dataset, collate_fn=dataset.collate_fn, **kwargs
+                    )
             else:
                 datasets = []
                 for dataset_name in self.dataset:
@@ -289,6 +293,7 @@ class Experiment(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
     pretrain_mode: tp.Literal["none", "simclr"] = "none"
+    pretrain_checkpoint: str | None = None
 
     data: Data
     brain_model_config: ModelConfig
@@ -332,6 +337,18 @@ class Experiment(pydantic.BaseModel):
                 checkpoint_path = os.path.join(self.infra.folder, "best.ckpt")
             else:
                 checkpoint_path = os.path.join(self.infra.folder, "last.ckpt")
+
+        if self.pretrain_checkpoint and self.pretrain_mode == "none":
+            print(f"\nLoading pretrained encoder weights from {self.pretrain_checkpoint}\n")
+            ckpt = torch.load(self.pretrain_checkpoint, map_location="cpu")
+            model_state = {
+                k[len("model."):]: v
+                for k, v in ckpt["state_dict"].items()
+                if k.startswith("model.")
+            }
+            missing, unexpected = model.load_state_dict(model_state, strict=False)
+            if missing:
+                print(f"Missing keys (will be randomly initialized): {missing}")
 
         module_cls = SimCLRModule if self.pretrain_mode == "simclr" else BrainModule
        

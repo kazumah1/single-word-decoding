@@ -23,7 +23,7 @@ default_config = {
         "cpus_per_task": NUM_CPUS,
         "job_name": "sentence_decoding",
         "workdir": {
-            "copied": ["neuralset", "neuraltrain", "projects"],
+            "copied": ["neuralset", "neuraltrain"],
             "includes": ["*.py"],
         },
     },
