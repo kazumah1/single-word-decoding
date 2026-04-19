@@ -482,12 +482,12 @@ class MultiScaleSimpleConvConfig(SimpleConvConfig):
         return MultiScaleSimpleConv(n_in_channels, n_outputs, config=self)
 
 # ---------------------------------------------------------------------------
-# MultiScaleSimpleConvPretrainConfig
+# PretrainConfig: uhhhhhhhhhhh yeah
 # ---------------------------------------------------------------------------
 
-class MultiScaleSimpleConvPretrainConfig(MultiScaleSimpleConvConfig):
+class PretrainConfig(MultiScaleSimpleConvConfig):
      def build(self, n_in_channels: int, n_outputs: int) -> nn.Module:
-        return MultiScaleSimpleConvPretrain(n_in_channels, n_outputs, mask_ratio=0.5, mask_span=10, config=self)
+        return MultiScaleSimpleConvPretrain(n_in_channels, n_outputs, config=self)
 
 
 # ---------------------------------------------------------------------------
@@ -597,8 +597,8 @@ class SimpleConv(nn.Module):
             in_channels = dim
 
         # Compute the channel schedule shared by all encoder variants.
-        self.sizes = [in_channels]
-        self.sizes += [
+        sizes = [in_channels]
+        sizes += [
             int(round(config.hidden * config.growth**k)) for k in range(config.depth)
         ]
 
@@ -852,7 +852,7 @@ class MultiScaleSimpleConv(SimpleConv):
 
 
 # ---------------------------------------------------------------------------
-# Autoencoder (NEW)
+# MultiScaleSimpleConv  (NEW)
 # ---------------------------------------------------------------------------
 
 class MultiScaleSimpleConvPretrain(MultiScaleSimpleConv):
@@ -860,19 +860,16 @@ class MultiScaleSimpleConvPretrain(MultiScaleSimpleConv):
         self,
         in_channels: int,
         out_channels: int,
-        mask_ratio: float = 0.5,
-        mask_span: int = 10, 
-        config: MultiScaleSimpleConvPretrainConfig | None = None,
+        config: PretrainConfig | None = None,
     ) -> None:
-        config = config if config is not None else MultiScaleSimpleConvPretrainConfig()
+        config = config if config is not None else MultiScaleSimpleConvConfig()
 
+        # Store dilation_growths on the instance BEFORE calling super().__init__().
+        # SimpleConv.__init__ calls self._build_encoder(), which is already
+        # overridden on this class and needs to know the dilation schedule.
+        # Because __new__ has already created the object at this point, setting
+        # an attribute here is safe even though super().__init__() has not run.
         super().__init__(in_channels=in_channels, out_channels=out_channels, config=config)
-        self.mask_ratio = mask_ratio
-        self.mask_span = mask_span
-
-        self.decoder_channels = list(reversed(self.sizes))
-        self.decoder = ConvSequence(channels=self.decoder_channels, decode=True)
-    
         
     def pretrain_forward(
         self,
@@ -880,12 +877,12 @@ class MultiScaleSimpleConvPretrain(MultiScaleSimpleConv):
         subject_ids: torch.Tensor | None = None,
         channel_positions: torch.Tensor | None = None
         ) -> torch.Tensor:
+        
 
-        x_masked, masker = MEG_mask(x, self.mask_ratio, self.mask_span)
-        x_encoded = super().forward(x_masked)
 
-        out = self.decoder(x_encoded)
-        return (out, x, masker)
+
+        
+
 
 
 # ---------------------------------------------------------------------------
