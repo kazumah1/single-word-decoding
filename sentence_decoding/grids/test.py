@@ -20,7 +20,7 @@ default_params = {
     "transformer_config": {
         "name": "LlamaTransformer",
         "model_name": "meta-llama/Meta-Llama-3.1-8B",
-        "num_layers": 32,          # use only 4 of 32 layers to fit in memory
+        "num_layers": 12,          # use only 4 of 32 layers to fit in memory
         "freeze_pretrained": True,
         "torch_dtype": "bfloat16",
     },
