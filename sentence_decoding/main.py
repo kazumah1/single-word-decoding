@@ -295,7 +295,7 @@ class Experiment(pydantic.BaseModel):
 
     model_config = pydantic.ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
-    pretrain_mode: tp.Literal["none", "simclr"] = "none"
+    pretrain_mode: tp.Literal["none", "simclr", "maeeg"] = "none"
     pretrain_checkpoint: str | None = None
 
     data: Data
@@ -349,11 +349,21 @@ class Experiment(pydantic.BaseModel):
                 for k, v in ckpt["state_dict"].items()
                 if k.startswith("model.")
             }
+            DROP_PREFIXES = ("merger.", "subject_layers.", "decoder.", "decoder_proj.")
+            model_state = {k: v for k, v in model_state.items() if not k.startswith(DROP_PREFIXES)}
             missing, unexpected = model.load_state_dict(model_state, strict=False)
             if missing:
                 print(f"Missing keys (will be randomly initialized): {missing}")
 
-        module_cls = SimCLRModule if self.pretrain_mode == "simclr" else BrainModule
+        
+        if self.pretrain_mode == "simclr":
+            module_cls = SimCLRModule
+        elif self.pretrain_mode == "maeeg":
+            from sentence_decoding.pl_module import MAEEGModule
+            module_cls = MAEEGModule
+        else:
+            module_cls = BrainModule
+       
        
         if os.path.exists(checkpoint_path):
             print(f"\nLoading model {checkpoint_path}\n")

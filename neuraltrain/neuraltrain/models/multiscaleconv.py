@@ -484,16 +484,26 @@ class MultiScaleSimpleConvConfig(SimpleConvConfig):
         return MultiScaleSimpleConv(n_in_channels, n_outputs, config=self)
 
 # ---------------------------------------------------------------------------
-# MultiScaleSimpleConvPretrainConfig
+# MultiScaleSimpleConvPretrainConfig  (FIXED)
 # ---------------------------------------------------------------------------
-
 class MultiScaleSimpleConvPretrainConfig(MultiScaleSimpleConvConfig):
     name: tp.Literal["MultiScaleSimpleConvPretrain"] = "MultiScaleSimpleConvPretrain"  # type: ignore[assignment]
 
+    # Tunable masking schedule
+    mask_ratio: float = 0.5
+    mask_span: int = 10
+
+    # Pretraining must be subject-agnostic for the pretrained weights to transfer.
+    # These overrides force the per-subject modules off during pretraining.
+    merger: bool = False
+    subject_layers: bool = False
+
     def build(self, n_in_channels: int, n_outputs: int) -> nn.Module:
-        return MultiScaleSimpleConvPretrain(n_in_channels, n_outputs, mask_ratio=0.5, mask_span=10, config=self)
-
-
+        return MultiScaleSimpleConvPretrain(
+            n_in_channels, n_outputs,
+            mask_ratio=self.mask_ratio, mask_span=self.mask_span,
+            config=self,
+        )
 # ---------------------------------------------------------------------------
 # SimpleConv  (refactored: encoder construction extracted to _build_encoder)
 # ---------------------------------------------------------------------------
@@ -854,43 +864,65 @@ class MultiScaleSimpleConv(SimpleConv):
             **branch_params,
         )
 
-
 # ---------------------------------------------------------------------------
-# Autoencoder (NEW)
+# MultiScaleSimpleConvPretrain  (FIXED)
 # ---------------------------------------------------------------------------
-
 class MultiScaleSimpleConvPretrain(MultiScaleSimpleConv):
+    """Masked-autoencoder pretraining wrapper around the multi-scale backbone.
+
+    The decoder mirrors the encoder's channel schedule and projects all the way
+    back to the raw input channel count so that the MAE reconstruction loss is
+    well-defined.  Temporal length is preserved by clipping to the input length
+    in forward(), matching the pattern used by SimpleConv.forward.
+    """
+
     def __init__(
         self,
         in_channels: int,
         out_channels: int,
         mask_ratio: float = 0.5,
-        mask_span: int = 10, 
+        mask_span: int = 10,
         config: MultiScaleSimpleConvPretrainConfig | None = None,
     ) -> None:
         config = config if config is not None else MultiScaleSimpleConvPretrainConfig()
-
         super().__init__(in_channels=in_channels, out_channels=out_channels, config=config)
         self.mask_ratio = mask_ratio
         self.mask_span = mask_span
+        self._raw_in_channels = in_channels  # before any pre-processing
 
-        self.decoder_channels = list(reversed(self.sizes))
-        self.decoder = ConvSequence(channels=self.decoder_channels, stride=1, decode=True)
-    
-        
+        # Build a decoder whose output channel count matches the RAW input.
+        # We mirror the encoder schedule, then append a 1x1 projection to
+        # raw_in_channels.  Use stride=1 + odd kernel so the time axis is
+        # preserved (we additionally clip in forward).
+        decoder_channels = list(reversed(self.sizes))
+        self.decoder = ConvSequence(
+            channels=decoder_channels,
+            kernel=3, stride=1, dilation_growth=1,
+            decode=True, batch_norm=True, activation_on_last=True,
+        )
+        self.decoder_proj = nn.Conv1d(decoder_channels[-1], in_channels, kernel_size=1)
+
     def pretrain_forward(
         self,
         x: torch.Tensor,
         subject_ids: torch.Tensor | None = None,
-        channel_positions: torch.Tensor | None = None
-        ) -> torch.Tensor:
-
+        channel_positions: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        T = x.shape[-1]
         x_masked, masker = MEG_mask(x, self.mask_ratio, self.mask_span)
-        x_encoded = super().forward(x_masked)
-
+        # Pass subject/channel context through to the parent forward so the
+        # call works regardless of whether merger/subject_layers are enabled.
+        x_encoded = super().forward(
+            x_masked, subject_ids=subject_ids, channel_positions=channel_positions
+        )
         out = self.decoder(x_encoded)
-        return (out, x, masker)
-
+        out = self.decoder_proj(out)
+        # Clip / pad temporal axis back to the input length for a clean MAE loss.
+        if out.shape[-1] >= T:
+            out = out[..., :T]
+        else:
+            out = nn.functional.pad(out, (0, T - out.shape[-1]))
+        return out, x, masker
 
 # ---------------------------------------------------------------------------
 # SimpleConvTimeAgg  (unchanged)
