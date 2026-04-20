@@ -299,6 +299,10 @@ class Experiment(pydantic.BaseModel):
 
     pretrain_mode: tp.Literal["none", "simclr", "maeeg"] = "none"
     pretrain_checkpoint: str | None = None
+    # Human-readable identifier for this run; propagated to figure titles,
+    # eval-results JSON, and per-config output folders in multi-config sweeps.
+    config_name: str | None = None
+
 
     data: Data
     brain_model_config: ModelConfig
@@ -468,7 +472,7 @@ class Experiment(pydantic.BaseModel):
             # RichProgressBar(leave=True),
             ShuffleSentences(),
             InitialEvaluation(),
-            TrainingCurves(),
+            TrainingCurves(config_name=self.config_name),
         ]
         if self.save_checkpoints:
             callbacks.append(
@@ -496,6 +500,7 @@ class Experiment(pydantic.BaseModel):
                     event_type=self.data.event_type,
                     retrieval_set_sizes=[None, 250],
                     decoder=decoder,
+                    config_name=self.config_name,
                 )
             )
 
@@ -547,6 +552,52 @@ class Experiment(pydantic.BaseModel):
         loaders = self.data.prepare(pretrain_mode=self.pretrain_mode)
 
         return loaders
+
+    def cleanup_run_artifacts(
+        self,
+        keep: tuple[str, ...] = (
+            "figures", "eval_results.json", "training_history.csv", "config.yaml",
+        ),
+    ) -> None:
+        """Drop everything under self.infra.folder except `keep`.
+
+        Use after a training run so checkpoints, lightning_logs, retrieval_outputs,
+        decoded_sentences, .submitit job files etc. don't pile up across configs.
+        The shared dataset cache lives outside infra.folder and is preserved.
+        """
+        folder = Path(self.infra.folder)
+        if not folder.exists():
+            return
+        keep_set = set(keep)
+        for entry in folder.iterdir():
+            if entry.name in keep_set:
+                continue
+            try:
+                if entry.is_dir():
+                    shutil.rmtree(entry, ignore_errors=True)
+                else:
+                    entry.unlink()
+            except OSError:
+                pass
+
+    def collect_run_artifacts(self, dest_dir: str | Path, label: str | None = None,) -> Path:
+        """Copy figures + eval_results.json + training_history.csv into
+        dest_dir/<label>/ for the multi-config aggregator. Returns the dest path.
+        """
+        label = label or self.config_name or Path(self.infra.folder).name
+        out = Path(dest_dir) / label
+        (out / "figures").mkdir(parents=True, exist_ok=True)
+        fig_src = Path(self.infra.folder) / "figures"
+        if fig_src.exists():
+            for f in fig_src.iterdir():
+                if f.is_file():
+                    shutil.copy2(f, out / "figures" / f.name)
+        for fname in ("eval_results.json", "training_history.csv", "config.yaml"):
+            f = Path(self.infra.folder) / fname
+            if f.exists():
+                shutil.copy2(f, out / fname)
+        return out
+
 
     @infra.apply
     def run(self):

@@ -45,12 +45,14 @@ class TestRetrieval(Callback):
         event_field="text",
         retrieval_set_sizes=[None, 250],
         decoder: Decoder | None = None,
+        config_name: str | None = None,
     ):
         self.event_type = event_type
         self.event_field = event_field
         self.retrieval_set_sizes = retrieval_set_sizes
         self.full_outputs = {}
         self.decoder = decoder
+        self.config_name = config_name
 
     def setup(self, trainer: pl.Trainer, pl_module: pl.LightningModule, stage: str):
         if not hasattr(pl_module, "retrieval_metrics") and not isinstance(
@@ -117,6 +119,47 @@ class TestRetrieval(Callback):
             save_dir = os.path.join(trainer.logger.save_dir, "retrieval_outputs")
             os.makedirs(save_dir, exist_ok=True)
             torch.save(full, os.path.join(save_dir, f"{step_name}_{dataloader_idx}.pt"))
+
+
+    def _label_prefix(self, prefix: str) -> str:
+        return f"[{self.config_name}] {prefix}" if self.config_name else prefix
+
+    def _slug_prefix(self, prefix: str) -> str:
+        if not self.config_name:
+            return prefix
+        safe = "".join(c if c.isalnum() or c in ("_", "-") else "_"
+                    for c in self.config_name)
+        return f"{safe}__{prefix}"
+
+
+    def _save_eval_results(self, trainer, step_name, dataloader_idx, retrieval_out, sentence_out, sentence_accs,):
+        if not (trainer.logger and getattr(trainer.logger, "save_dir", None)):
+            return
+        flat: dict[str, float] = {}
+        for src in (retrieval_out, sentence_out):
+            for k, v in (src or {}).items():
+                try:
+                    flat[k] = float(v)
+                except Exception:
+                    pass
+        if sentence_accs:
+            flat["sentence_accuracy_mean"] = float(np.mean(sentence_accs))
+        out_path = os.path.join(trainer.logger.save_dir, "eval_results.json")
+        existing: dict = {}
+        if os.path.exists(out_path):
+            try:
+                with open(out_path) as f:
+                    existing = json.load(f)
+            except Exception:
+                existing = {}
+        key = f"{step_name}_{dataloader_idx}"
+        block = existing.get(key, {})
+        block.update(flat)
+        if self.config_name:
+            block["config_name"] = self.config_name
+        existing[key] = block
+        with open(out_path, "w") as f:
+            json.dump(existing, f, indent=2)
 
     def _collate_outputs(self, outputs, batch, dataloader_idx):
         y_pred, y_true = outputs
@@ -197,6 +240,12 @@ class TestRetrieval(Callback):
             for key, value in out_metrics.items():
                 key += f"_{dataloader_idx}"
                 pl_module.log(key, value)
+            self._save_eval_results(
+                trainer, step_name, dataloader_idx,
+                retrieval_out=all_retrieval_out,
+                sentence_out=out_metrics,
+                sentence_accs=sentence_accs,
+                )
             save_dir = os.path.join(
                 trainer.logger.save_dir,
                 f"decoded_sentences",
@@ -376,7 +425,8 @@ class TestRetrieval(Callback):
 
         fig_dir = os.path.join(trainer.logger.save_dir, "figures")
         os.makedirs(fig_dir, exist_ok=True)
-        prefix = f"{step_name}_{dataloader_idx}"
+        title_prefix = self._label_prefix(f"{step_name}_{dataloader_idx}")
+        file_prefix  = self._slug_prefix(f"{step_name}_{dataloader_idx}")
 
         # Precompute per-query ranks once; shared by several figures.
         ranks_per_query, groups_per_query, n_candidates = (None, None, None)
@@ -388,22 +438,22 @@ class TestRetrieval(Callback):
             pass
 
         try:
-            self._fig_retrieval_bar_chart(fig_dir, prefix, all_retrieval_out, plt)
+            self._fig_retrieval_bar_chart(fig_dir, title_prefix, file_prefix, all_retrieval_out, plt)
         except Exception:
             pass
         try:
-            self._fig_similarity_heatmap(fig_dir, prefix, y_pred, y_true, groups_pred, plt)
+            self._fig_similarity_heatmap(fig_dir, title_prefix, file_prefix, y_pred, y_true, groups_pred, plt)
         except Exception:
             pass
         try:
             self._fig_similarity_heatmap_row_normalized(
-                fig_dir, prefix, y_pred, y_true, groups_pred, plt
+                fig_dir, title_prefix, file_prefix, y_pred, y_true, groups_pred, plt
             )
         except Exception:
             pass
         try:
             self._fig_per_word_rank(
-                fig_dir, prefix, ranks_per_query, groups_per_query, plt,
+                fig_dir, title_prefix, file_prefix, ranks_per_query, groups_per_query, plt,
                 y_pred=y_pred, y_true=y_true, groups_pred=groups_pred,
             )
         except Exception:
@@ -412,25 +462,25 @@ class TestRetrieval(Callback):
         if ranks_per_query:
             try:
                 self._fig_rank_distribution(
-                    fig_dir, prefix, ranks_per_query, n_candidates, plt
+                    fig_dir, title_prefix, file_prefix, ranks_per_query, n_candidates, plt
                 )
             except Exception:
                 pass
             try:
                 self._fig_topk_accuracy_curve(
-                    fig_dir, prefix, ranks_per_query, n_candidates, plt
+                    fig_dir, title_prefix, file_prefix, ranks_per_query, n_candidates, plt
                 )
             except Exception:
                 pass
 
         if sentence_accs:
             try:
-                self._fig_sentence_accuracy(fig_dir, prefix, sentence_accs, plt)
+                self._fig_sentence_accuracy(fig_dir, title_prefix, file_prefix, sentence_accs, plt)
             except Exception:
                 pass
 
     @staticmethod
-    def _fig_retrieval_bar_chart(fig_dir, prefix, all_retrieval_out, plt):
+    def _fig_retrieval_bar_chart(fig_dir, title_prefix, file_prefix, all_retrieval_out, plt):
         """
         Bar chart of all retrieval metrics.
         
@@ -489,17 +539,17 @@ class TestRetrieval(Callback):
             ax.grid(True, axis="y", alpha=0.3)
             if title.startswith("Top-k"):
                 ax.set_ylim(0, max(1.0, max(values) * 1.15))
-        fig.suptitle(f"{prefix} — Retrieval Metrics", fontsize=11)
+        fig.suptitle(f"{title_prefix} — Retrieval Metrics", fontsize=11)
 
         plt.tight_layout()
         plt.savefig(
-            os.path.join(fig_dir, f"{prefix}_retrieval_metrics.png"),
+            os.path.join(fig_dir, f"{file_prefix}_retrieval_metrics.png"),
             dpi=100, bbox_inches="tight",
         )
         plt.close(fig)
 
     @staticmethod
-    def _fig_similarity_heatmap(fig_dir, prefix, y_pred, y_true, groups_pred, plt):
+    def _fig_similarity_heatmap(fig_dir, title_prefix, file_prefix, y_pred, y_true, groups_pred, plt):
         """Cosine-similarity heatmap between sampled predictions and unique word embeddings."""
         agg_y_true, agg_groups_true = agg_per_group(y_true, groups=groups_pred, agg_func="first")
         word_to_agg_idx = {w: i for i, w in enumerate(agg_groups_true)}
@@ -533,11 +583,11 @@ class TestRetrieval(Callback):
         ax.set_yticklabels(selected_words, fontsize=6)
         ax.set_xlabel("Candidate word (true embedding)")
         ax.set_ylabel("Query word (predicted embedding)")
-        ax.set_title(f"{prefix} — Cosine Similarity Matrix (n={len(selected_words)} words)")
+        ax.set_title(f"{title_prefix} — Cosine Similarity Matrix (n={len(selected_words)} words)")
         plt.colorbar(im, ax=ax, label="Cosine similarity")
         plt.tight_layout()
         plt.savefig(
-            os.path.join(fig_dir, f"{prefix}_similarity_matrix.png"),
+            os.path.join(fig_dir, f"{file_prefix}_similarity_matrix.png"),
             dpi=100, bbox_inches="tight",
         )
         plt.close(fig)
@@ -568,7 +618,7 @@ class TestRetrieval(Callback):
         return ranks, groups, len(agg_groups_true)
     
     @staticmethod
-    def _fig_per_word_rank(fig_dir, prefix, ranks_per_query, groups_per_query, plt,y_pred=None, y_true=None, groups_pred=None,):
+    def _fig_per_word_rank(fig_dir, title_prefix, file_prefix, ranks_per_query, groups_per_query, plt,y_pred=None, y_true=None, groups_pred=None,):
         """Horizontal bar charts of the best- and worst-decoded words by median rank."""
         if not ranks_per_query or not groups_per_query:
             # Fallback: recompute if caller didn't pass the precomputed ranks.
@@ -587,7 +637,7 @@ class TestRetrieval(Callback):
         plt.close(fig)
 
     @staticmethod
-    def _fig_sentence_accuracy(fig_dir, prefix, sentence_accs, plt):
+    def _fig_sentence_accuracy(fig_dir, title_prefix, file_prefix, sentence_accs, plt):
         """Histogram of per-sentence word-level accuracy."""
         accs = np.array(sentence_accs, dtype=float)
         mean_acc = float(np.mean(accs))
@@ -597,17 +647,17 @@ class TestRetrieval(Callback):
                    label=f"Mean: {mean_acc:.2f}")
         ax.set_xlabel("Word-level Accuracy per Sentence")
         ax.set_ylabel("Count")
-        ax.set_title(f"{prefix} — Sentence Accuracy Distribution")
+        ax.set_title(f"{title_prefix} — Sentence Accuracy Distribution")
         ax.legend(fontsize=9)
         plt.tight_layout()
         plt.savefig(
-            os.path.join(fig_dir, f"{prefix}_sentence_accuracy.png"),
+            os.path.join(fig_dir, f"{file_prefix}_sentence_accuracy.png"),
             dpi=100, bbox_inches="tight",
         )
         plt.close(fig)
 
     @staticmethod
-    def _fig_rank_distribution(fig_dir, prefix, ranks_per_query, n_candidates, plt):
+    def _fig_rank_distribution(fig_dir, title_prefix, file_prefix, ranks_per_query, n_candidates, plt):
         """Histogram of per-query ranks over the full retrieval set.
         Complements the median-rank bars by showing the whole distribution, including
         the mass at rank 1 (correct top-1 retrievals) and the tail.
@@ -632,18 +682,18 @@ class TestRetrieval(Callback):
         )
         ax.set_ylabel("Count")
         ax.set_title(
-            f"{prefix} — Rank Distribution "
+            f"{title_prefix} — Rank Distribution "
             f"(N={len(ranks)} queries, V={n_candidates} candidates)"
         )
         ax.legend(fontsize=9)
         plt.tight_layout()
         plt.savefig(
-            os.path.join(fig_dir, f"{prefix}_rank_distribution.png"),
+            os.path.join(fig_dir, f"{file_prefix}_rank_distribution.png"),
             dpi=100, bbox_inches="tight",
         )
         plt.close(fig)
     @staticmethod
-    def _fig_topk_accuracy_curve(fig_dir, prefix, ranks_per_query, n_candidates, plt):
+    def _fig_topk_accuracy_curve(fig_dir, title_prefix, file_prefix, ranks_per_query, n_candidates, plt):
         """Top-k accuracy curve across k, with chance baseline.
         acc@k = fraction of queries whose correct word is within the top-k nearest
         neighbors. A model that beats chance lifts this curve above the diagonal.
@@ -670,7 +720,7 @@ class TestRetrieval(Callback):
         ax.set_xlabel("k")
         ax.set_ylabel("Accuracy @ k")
         ax.set_title(
-            f"{prefix} — Top-k Retrieval Accuracy (V={n_candidates})"
+            f"{title_prefix} — Top-k Retrieval Accuracy (V={n_candidates})"
         )
         ax.set_xlim(1, n_candidates)
         ax.set_ylim(0, 1.02)
@@ -678,13 +728,13 @@ class TestRetrieval(Callback):
         ax.legend(fontsize=9)
         plt.tight_layout()
         plt.savefig(
-            os.path.join(fig_dir, f"{prefix}_topk_accuracy.png"),
+            os.path.join(fig_dir, f"{file_prefix}_topk_accuracy.png"),
             dpi=100, bbox_inches="tight",
         )
         plt.close(fig)
     @staticmethod
     def _fig_similarity_heatmap_row_normalized(
-        fig_dir, prefix, y_pred, y_true, groups_pred, plt
+        fig_dir, title_prefix, file_prefix, y_pred, y_true, groups_pred, plt
     ):
         """Row-centered cosine-similarity heatmap.
         When the raw similarities live in a narrow band (e.g. 0.9990..0.9995 for
@@ -730,12 +780,12 @@ class TestRetrieval(Callback):
         ax.set_xlabel("Candidate word (true embedding)")
         ax.set_ylabel("Query word (predicted embedding)")
         ax.set_title(
-            f"{prefix} — Row-Centered Cosine Similarity (n={len(selected_words)} words)"
+            f"{title_prefix} — Row-Centered Cosine Similarity (n={len(selected_words)} words)"
         )
         plt.colorbar(im, ax=ax, label="Similarity − row mean")
         plt.tight_layout()
         plt.savefig(
-            os.path.join(fig_dir, f"{prefix}_similarity_matrix_row_norm.png"),
+            os.path.join(fig_dir, f"{file_prefix}_similarity_matrix_row_norm.png"),
             dpi=100, bbox_inches="tight",
         )
         plt.close(fig)
@@ -748,8 +798,9 @@ class TrainingCurves(Callback):
     `val_cnn_loss`). This fills the biggest visualization gap the original
     callbacks had: no way to see loss / accuracy evolving over epochs.
     """
-    def __init__(self, include_patterns: list[str] | None = None):
+    def __init__(self, include_patterns: list[str] | None = None, config_name: str | None = None):
         self.include_patterns = include_patterns
+        self.config_name = config_name
         self._history: dict[str, list[tuple[int, float]]] = defaultdict(list)
     def _keep(self, key: str) -> bool:
         if not self.include_patterns:
@@ -806,6 +857,18 @@ class TrainingCurves(Callback):
         flat = {k: v for k, v in self._history.items()}
         try:
             torch.save(flat, os.path.join(fig_dir, "training_history.pt"))
+            # CSV history for multi-config aggregation (one row per (metric, epoch) point).
+            csv_path = os.path.join(trainer.logger.save_dir, "training_history.csv")
+            try:
+                with open(csv_path, "w", newline="") as f:
+                    w = csv.writer(f)
+                    w.writerow(["config_name", "metric", "epoch", "value"])
+                    for key, series in self._history.items():
+                        for epoch, value in series:
+                            w.writerow([self.config_name or "", key, epoch, value])
+            except Exception:
+                pass
+
         except Exception:
             pass
         split_colors = {"train": "steelblue", "val": "firebrick", "test": "seagreen",
@@ -832,7 +895,7 @@ class TrainingCurves(Callback):
                 continue
             ax.set_xlabel("Epoch")
             ax.set_ylabel(base)
-            ax.set_title(f"Training Curve — {base}")
+            ax.set_title(f"Training Curve — {base}"+ (f"  ({self.config_name})" if self.config_name else ""))
             ax.grid(True, alpha=0.3)
             ax.legend(fontsize=9)
             plt.tight_layout()
