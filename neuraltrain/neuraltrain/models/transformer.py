@@ -10,10 +10,17 @@ Transformer models
 
 import logging
 import typing as tp
+import warnings
 
 import torch
 from torch import nn
-from x_transformers import Encoder  # type: ignore
+with warnings.catch_warnings():
+    warnings.filterwarnings(
+        "ignore",
+        message=r"`torch\.cuda\.amp\.autocast",
+        category=FutureWarning,
+    )
+    from x_transformers import Encoder  # type: ignore
 
 from .base import BaseModelConfig
 
@@ -120,7 +127,7 @@ class LlamaTransformerConfig(BaseModelConfig):
     model_name: str = "meta-llama/Meta-Llama-3.1-8B"
     num_layers: int | None = None       # None → use all 32 layers
     freeze_pretrained: bool = True
-    torch_dtype: str = "bfloat16"       # "float32" | "float16" | "bfloat16"
+    torch_dtype: str = "float32"       # "float32" | "float16" | "bfloat16"
  
     def build(self, dim: int) -> nn.Module:
         return LlamaTransformerEncoder(dim, config=self)
@@ -184,7 +191,7 @@ class LlamaTransformerEncoder(nn.Module):
         llama_hf_config = AutoConfig.from_pretrained(config.model_name)
         llama_model = AutoModelForCausalLM.from_pretrained(
             config.model_name,
-            torch_dtype=load_dtype,
+            dtype=load_dtype,
         )
  
         # ------------------------------------------------------------------ #
@@ -204,7 +211,18 @@ class LlamaTransformerEncoder(nn.Module):
         # Decoder blocks and the shared final RMSNorm
         self.layers = nn.ModuleList(llama_model.model.layers[:n_keep])
         self.norm   = llama_model.model.norm
- 
+
+        # transformers >= 4.45 moved rotary_emb to a shared model-level module
+        # rather than per-layer.  Extract it and re-attach it to each layer's
+        # self_attn so that forward() can rely on each layer computing its own
+        # position embeddings internally (required for transformers >= 5.0).
+        self.rotary_emb = getattr(llama_model.model, "rotary_emb", None)
+        if self.rotary_emb is not None:
+            for layer in self.layers:
+                attn = getattr(layer, "self_attn", None)
+                if attn is not None and not getattr(attn, "rotary_emb", None):
+                    attn.rotary_emb = self.rotary_emb
+
         # Free the embedding table, LM head and any remaining decoder blocks
         del llama_model
  
@@ -306,10 +324,18 @@ class LlamaTransformerEncoder(nn.Module):
  
         # ---- cache_position (required by transformers >= 4.40) ----------- #
         cache_position = torch.arange(T, device=x.device)
- 
+
+        # ---- compute position embeddings ---------------------------------- #
+        # transformers 5.0 made position_embeddings a required kwarg: the
+        # attention module unconditionally does `cos, sin = position_embeddings`
+        # with no internal fallback.  Compute once here and pass to every layer.
+        if self.rotary_emb is not None:
+            position_embeddings = self.rotary_emb(x, position_ids)
+        else:
+            position_embeddings = None
+
         # ---- run through LLaMA decoder layers ----------------------------- #
         for layer in self.layers:
-            # Support both older (<4.40) and newer (>=4.40) transformers APIs
             try:
                 layer_out = layer(
                     x,
@@ -317,16 +343,26 @@ class LlamaTransformerEncoder(nn.Module):
                     position_ids=position_ids,
                     use_cache=False,
                     cache_position=cache_position,
+                    position_embeddings=position_embeddings,
                 )
             except TypeError:
-                # Older transformers: no cache_position argument
-                layer_out = layer(
-                    x,
-                    attention_mask=attn_mask_4d,
-                    position_ids=position_ids,
-                    use_cache=False,
-                )
-            x = layer_out[0]
+                # Older transformers: unknown kwargs — try progressively simpler
+                try:
+                    layer_out = layer(
+                        x,
+                        attention_mask=attn_mask_4d,
+                        position_ids=position_ids,
+                        use_cache=False,
+                        cache_position=cache_position,
+                    )
+                except TypeError:
+                    layer_out = layer(
+                        x,
+                        attention_mask=attn_mask_4d,
+                        position_ids=position_ids,
+                        use_cache=False,
+                    )
+            x = layer_out[0] if isinstance(layer_out, tuple) else layer_out
  
         # ---- final LLaMA RMSNorm ------------------------------------------ #
         x = self.norm(x)

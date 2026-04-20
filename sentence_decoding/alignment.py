@@ -17,6 +17,8 @@ from sentence_decoding.main import Data
 from scipy.stats import pearsonr
 from sklearn.linear_model import RidgeCV
 from tqdm import trange
+from sklearn.decomposition import PCA
+from sklearn.linear_model import RidgeCV
 
 from neuralset.infra.task import TaskInfra
 from neuraltrain.metrics import TopkAcc
@@ -29,10 +31,13 @@ class Mapper(pydantic.BaseModel):
     dynamic: bool = True
     alphas_per_target: bool = True
     stride: int = 1
+    pca_components: tp.Optional[int] = None # SET TO 512 FOR LLAMA - REDUCES LLAMA DIMS TO t5 DIMS VIA PCA
     _model: tp.Any = pydantic.PrivateAttr()
 
     def apply(self, neuro, feature, words) -> np.ndarray:
         ridge = RidgeCV(np.logspace(-2, 8, 7), alpha_per_target=self.alphas_per_target)
+        if self.pca_components is not None:
+            ridge = RidgeCV(np.logspace(1, 12, 12), alpha_per_target=False)
         # scaler = StandardScaler()
         # model = make_pipeline(scaler, ridge)
         model = ridge
@@ -41,10 +46,15 @@ class Mapper(pydantic.BaseModel):
         n_dims = feature["train"].shape[1]
         Y = feature["train"]
         Y_test = feature["test"]
+        if self.pca_components is not None and n_dims > self.pca_components:
+            _pca = PCA(n_components=self.pca_components, random_state=0)
+            Y = _pca.fit_transform(Y)           # fit only on train split
+            Y_test = _pca.transform(Y_test)     # apply same projection to test
+            n_dims = self.pca_components
 
         if self.dynamic:
             R = torch.zeros(n_times // self.stride, n_dims)
-            coefs = torch.zeros(n_times // self.stride, n_dims, n_channels)
+            coefs = torch.zeros(n_times // self.stride, n_dims, n_channels) # COMMENT OUT FOR LLAMA - SAVES MEMORY
             acc = torch.zeros(n_times // self.stride)
             agg_acc = torch.zeros(n_times // self.stride)
             for t in trange(0, n_times, self.stride, desc="Decoding"):
@@ -54,7 +64,7 @@ class Mapper(pydantic.BaseModel):
                 Y_pred = model.predict(X_test)
                 for d in range(Y.shape[1]):
                     R[t // self.stride, d], _ = pearsonr(Y_test[:, d], Y_pred[:, d])
-                coefs[t // self.stride] = torch.from_numpy(ridge.coef_)
+                coefs[t // self.stride] = torch.from_numpy(ridge.coef_) # UNCOMMENT WHEN USING LLAMA - SAVES MEMORY
 
                 Y_pred = torch.from_numpy(Y_pred).float()
                 metrics = {

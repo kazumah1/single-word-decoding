@@ -29,7 +29,7 @@ default_config = {
     },
     "trainer_config": {
         "n_epochs": 50,  # 200
-        "transformer_start_epoch": 0,
+        "transformer_start_epoch": 3,
         "monitor": "val_retrieval_acc10_size=all_macro_0",
         "patience": 10,
         "lr": 1e-4,
@@ -57,8 +57,8 @@ default_config = {
         },
         "feature": {
             "name": "HuggingFaceText",
-            # "model_name": "facebook/opt-2.7b",
-            "model_name": "t5-large",
+            "model_name": "meta-llama/Meta-Llama-3.1-8B",
+            #"model_name": "t5-large", # COMMENT THIS LINE AND UNCOMMENT LINE ABOVE FOR LLAMA 3.1
             "aggregation": "trigger",
             "layers": 0.5,
             "infra": {
@@ -70,7 +70,7 @@ default_config = {
         },
         "start": 0.0,
         "duration": 3.0,
-        "batch_size": 128,
+        "batch_size": 64,
         "num_workers": NUM_CPUS,
     },
     "brain_model_config": {
@@ -98,7 +98,13 @@ default_config = {
     },
     "use_transformer": True,
     "use_target_scaler": False,
-    "transformer_config": {"name": "TransformerEncoder", "depth": 16, "heads": 16},
+    "transformer_config": {
+        "name": "LlamaTransformer",
+        "model_name": "meta-llama/Meta-Llama-3.1-8B",
+        "num_layers": 12,
+        "freeze_pretrained": True,
+        "torch_dtype": "bfloat16",
+    },
     "loss": {
         "name": "SigLip",
     },

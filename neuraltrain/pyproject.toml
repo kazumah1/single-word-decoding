@@ -20,6 +20,7 @@ dependencies = [
   "pytest>=7.4.0",
   "pydantic>=2.5.0",
   "torchmetrics>=1.1.2",
+  "transformers>=4.43.0",
   "braindecode@git+https://github.com/braindecode/braindecode@master",
 ]
 

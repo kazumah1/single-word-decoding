@@ -15,9 +15,17 @@ default_params = {
     "infra.cluster": None,
     "use_wandb": False,
     "data.n_timelines": 1,
-    "data.n_subjects": 10,
-    "save_checkpoints": True,
-    "trainer_config.n_epochs": 3,
+    "save_checkpoints": False,
+    "data.dataset": "Gwilliams2022",
+    "transformer_config": {
+        "name": "LlamaTransformer",
+        "model_name": "meta-llama/Meta-Llama-3.1-8B",
+        "num_layers": 32,          # use only 4 of 32 layers to fit in memory
+        "freeze_pretrained": True,
+        "torch_dtype": "bfloat16",
+    },
+}
+
     # "brain_model_config.time_agg_out": "eegnet",
     # "data.feature.model_name": "t5-large",
     # "loss": {"name": "MSELoss", "kwargs": {"reduction": "mean"}},
@@ -30,7 +38,7 @@ default_params = {
     #     "infra": {"folder": default_config["infra"]["folder"]},
     # },
     # "transformer_config.heads": 6,
-}
+    #}
 default = update_config(default_config, default_params)
 
 params = {"data.dataset": "Gwilliams2022", "pretrain_mode": "simclr"}

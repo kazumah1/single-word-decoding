@@ -362,19 +362,27 @@ class HuggingFaceText(BaseStatic):
                 from transformers import AutoModelForTextEncoding
 
                 Model = AutoModelForTextEncoding
-            elif "Phi-3" in self.model_name:
+            elif "Phi-3" in self.model_name or any(
+                k in self.model_name for k in ("llama", "Llama")
+            ):
                 from transformers import AutoModelForCausalLM
 
                 Model = AutoModelForCausalLM
             else:
                 Model = AutoModel
             # instantiate
+            _is_llama = any(k in self.model_name for k in ("llama", "Llama"))
             if self.device == "accelerate":
                 kwargs = {"device_map": "auto", "torch_dtype": torch.float16}
+            elif _is_llama:
+                # Llama 3.1 8B requires bfloat16 to fit in GPU memory; also
+                # enables device_map="auto" so it spreads across available GPUs
+                # or falls back gracefully to CPU offloading.
+                kwargs = {"device_map": "auto", "torch_dtype": torch.bfloat16}
             self._model = Model.from_pretrained(self.model_name, **kwargs)
             if not self.pretrained:
                 self._model = AutoModel.from_config(self._model.config)
-            if self.device != "accelerate":
+            if self.device != "accelerate" and not _is_llama:
                 self._model.to(self.device)
             self._model.eval()
             # tokens
@@ -433,7 +441,8 @@ class HuggingFaceText(BaseStatic):
         # Processing the data in batches
         if len(dloader) > 1:
             dloader = tqdm.tqdm(dloader, desc="Computing word embeddings")  # type: ignore
-        device = "auto" if self.device == "accelerate" else self.device
+        _is_llama = any(k in self.model_name for k in ("llama", "Llama"))
+        device = "auto" if self.device == "accelerate" or _is_llama else self.device
         if device == "auto":
             device = "cuda" if torch.cuda.is_available() else "cpu"
         for target_words, context in dloader:
@@ -483,6 +492,7 @@ class HuggingFaceText(BaseStatic):
                 word_state = self.aggregate_tokens(word_state)  # layers x embd
 
                 if self.cache_all_layers:
-                    yield word_state.cpu().numpy()
+                    yield word_state.cpu().float().numpy()
                 else:
-                    yield self.aggregate_layers(word_state).cpu().numpy()
+                    yield self.aggregate_layers(word_state).cpu().float().numpy()
+                    

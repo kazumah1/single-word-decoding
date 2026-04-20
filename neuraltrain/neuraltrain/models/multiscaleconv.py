@@ -66,7 +66,7 @@ def MEG_mask(x: torch.Tensor, mask_ratio: float, mask_span: int):
         return x_masked, masker
 
 # ---------------------------------------------------------------------------
-# SpatialFilter  (unchanged)
+# SpatialFilter
 # ---------------------------------------------------------------------------
 
 class SpatialFilter(nn.Module):
@@ -251,7 +251,7 @@ class ConvSequence(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# MultiScaleConvSequence  (NEW)
+# MultiScaleConvSequence 
 # ---------------------------------------------------------------------------
 
 class MultiScaleConvSequence(nn.Module):

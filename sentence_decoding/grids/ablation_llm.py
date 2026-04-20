@@ -18,7 +18,8 @@ updated_config = update_config(default_config, update)
 
 grid = {
     "data.feature.model_name": [
-        "google/mt5-large",
+        # "meta-llama/Meta-Llama-3.1-8B", # UNCOMMENT FOR LLAMA 3.1
+        "google/mt5-large", # COMMENT FOR LLAMA 3.1
         # "facebook/opt-1.3b",
         # ""
         # "google-t5/t5-small",

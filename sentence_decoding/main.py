@@ -20,9 +20,10 @@ from lightning.pytorch.callbacks import (
     LearningRateMonitor,
     ModelCheckpoint,
 )
-from sentence_decoding.callbacks import InitialEvaluation, TestRetrieval
 from sentence_decoding.pl_module import BrainModule, SimCLRModule
 from neuraltrain.augmentations import ContrastiveSegmentDataset, ContrastiveAugment
+from sentence_decoding.callbacks import InitialEvaluation, TestRetrieval, TrainingCurves
+from sentence_decoding.pl_module import BrainModule
 from sentence_decoding.utils import (
     LANGUAGES,
     ShuffledSegmentDataset,
@@ -39,6 +40,8 @@ from torch.utils.data import DataLoader
 torch.serialization.add_safe_globals([torch.nn.parameter.UninitializedParameter])
 from tqdm import tqdm
 
+torch.set_float32_matmul_precision("high")
+torch.backends.cudnn.benchmark = True
 import neuralset as ns
 from neuralset.infra.task import TaskInfra
 from neuralset.splitting import DeterministicSplitter, set_event_split
@@ -442,22 +445,19 @@ class Experiment(pydantic.BaseModel):
         else:
             self._logger = None
 
-        if self.pretrain_mode == "simclr":
-            monitor = "val_pretrain_cnn_loss"
-            monitor_mode = "min"
-            callbacks = [
-                LearningRateMonitor(logging_interval="epoch"),
-                EarlyStopping(monitor=monitor, patience=self.trainer_config.patience, mode=monitor_mode, verbose=True),
-            ]
-        else:
-            monitor = self.trainer_config.monitor
-            monitor_mode = "max" if "acc" in monitor else "min"
-            callbacks = [
-                LearningRateMonitor(logging_interval="epoch"),
-                EarlyStopping(monitor=monitor, patience=self.trainer_config.patience, mode=monitor_mode, verbose=True),
-                ShuffleSentences(),
-                InitialEvaluation(),
-            ]
+        callbacks = [
+            LearningRateMonitor(logging_interval="epoch"),
+            EarlyStopping(
+                monitor=self.trainer_config.monitor,
+                patience=self.trainer_config.patience,
+                mode="max" if "acc" in self.trainer_config.monitor else "min",
+                verbose=True,
+            ),
+            # RichProgressBar(leave=True),
+            ShuffleSentences(),
+            InitialEvaluation(),
+            TrainingCurves(),
+        ]
         if self.save_checkpoints:
             callbacks.append(
                 ModelCheckpoint(
