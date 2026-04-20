@@ -13,6 +13,7 @@ from .defaults import default_config
 
 default_params = {
     "infra.cluster": None,
+    "use_wandb": False,
     "data.n_timelines": 1,
     "save_checkpoints": False,
     "data.dataset": "Gwilliams2022",
@@ -40,7 +41,7 @@ default_params = {
     #}
 default = update_config(default_config, default_params)
 
-params = {"data.dataset": "Gwilliams2022"}
+params = {"data.dataset": "Gwilliams2022", "pretrain_mode": "simclr"}
 
 if __name__ == "__main__":
     config = update_config(default, params)
@@ -50,7 +51,7 @@ if __name__ == "__main__":
     if os.path.exists(folder):
         import shutil
 
-        shutil.rmtree(folder)
+        shutil.rmtree(folder, ignore_errors=True)
     task = Exp(
         **config,
     )

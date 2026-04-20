@@ -45,11 +45,25 @@ from torch import nn
 from torchvision.ops import MLP
 
 from .base import BaseModelConfig
-from .common import BahdanauAttention, ChannelMerger, LayerScale, MlpConfig, SubjectLayers
+from .common import BahdanauAttention, ChannelMerger, LayerScale, MlpConfig, SubjectLayers, SubjectLayersMLP
 from .transformer import LlamaTransformerConfig, TransformerEncoderConfig
 
 logger = logging.getLogger(__name__)
 
+def MEG_mask(x: torch.Tensor, mask_ratio: float, mask_span: int):
+        B, C, T = x.shape
+        n_masked_segments = int(T / mask_span * mask_ratio)
+        masker = torch.zeros(B, T, dtype=torch.bool, device=x.device)
+        
+        for b in range(B):
+            if n_masked_segments == 0 or T <= mask_span:
+                continue
+            start = torch.randint(0, T - mask_span + 1, (n_masked_segments,), device=x.device)
+            for s in start:
+                masker[b, s : s + mask_span] = True
+
+        x_masked = x.masked_fill(masker.unsqueeze(1), value=0)
+        return x_masked, masker
 
 # ---------------------------------------------------------------------------
 # SpatialFilter
@@ -433,6 +447,7 @@ class SimpleConvConfig(BaseModelConfig):
 # MultiScaleSimpleConvConfig  (NEW)
 # ---------------------------------------------------------------------------
 
+
 class MultiScaleSimpleConvConfig(SimpleConvConfig):
     """Configuration for ``MultiScaleSimpleConv``.
 
@@ -467,6 +482,16 @@ class MultiScaleSimpleConvConfig(SimpleConvConfig):
 
     def build(self, n_in_channels: int, n_outputs: int) -> nn.Module:
         return MultiScaleSimpleConv(n_in_channels, n_outputs, config=self)
+
+# ---------------------------------------------------------------------------
+# MultiScaleSimpleConvPretrainConfig
+# ---------------------------------------------------------------------------
+
+class MultiScaleSimpleConvPretrainConfig(MultiScaleSimpleConvConfig):
+    name: tp.Literal["MultiScaleSimpleConvPretrain"] = "MultiScaleSimpleConvPretrain"  # type: ignore[assignment]
+
+    def build(self, n_in_channels: int, n_outputs: int) -> nn.Module:
+        return MultiScaleSimpleConvPretrain(n_in_channels, n_outputs, mask_ratio=0.5, mask_span=10, config=self)
 
 
 # ---------------------------------------------------------------------------
@@ -570,14 +595,14 @@ class SimpleConv(nn.Module):
             dim = {"hidden": config.hidden, "input": in_channels}[
                 config.subject_layers_dim
             ]
-            self.subject_layers = SubjectLayers(
-                in_channels, dim, config.n_subjects, config.subject_layers_id
+            self.subject_layers = SubjectLayersMLP(
+                in_channels, dim, config.n_subjects
             )
             in_channels = dim
 
         # Compute the channel schedule shared by all encoder variants.
-        sizes = [in_channels]
-        sizes += [
+        self.sizes = [in_channels]
+        self.sizes += [
             int(round(config.hidden * config.growth**k)) for k in range(config.depth)
         ]
 
@@ -602,7 +627,7 @@ class SimpleConv(nn.Module):
             activation=activation,
         )
 
-        final_channels = sizes[-1]
+        final_channels = self.sizes[-1]
 
         self.final: nn.Module | nn.Sequential | None = None
         pad = 0
@@ -628,12 +653,12 @@ class SimpleConv(nn.Module):
             # last layer (the downstream transformer / aggregation provides
             # the non-linearity).
             params["activation_on_last"] = False
-            sizes[-1] = self.backbone_out_channels
+            self.sizes[-1] = self.backbone_out_channels
 
         # Delegate to the encoder-construction hook so subclasses can swap in
         # a different backbone (e.g. MultiScaleConvSequence) without
         # duplicating the pre-processing logic above.
-        self.encoder = self._build_encoder(sizes, params)
+        self.encoder = self._build_encoder(self.sizes, params)
 
         self.transformer = None
         if config.transformer_config:
@@ -828,6 +853,43 @@ class MultiScaleSimpleConv(SimpleConv):
             out_channels=self.backbone_out_channels,
             **branch_params,
         )
+
+
+# ---------------------------------------------------------------------------
+# Autoencoder (NEW)
+# ---------------------------------------------------------------------------
+
+class MultiScaleSimpleConvPretrain(MultiScaleSimpleConv):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        mask_ratio: float = 0.5,
+        mask_span: int = 10, 
+        config: MultiScaleSimpleConvPretrainConfig | None = None,
+    ) -> None:
+        config = config if config is not None else MultiScaleSimpleConvPretrainConfig()
+
+        super().__init__(in_channels=in_channels, out_channels=out_channels, config=config)
+        self.mask_ratio = mask_ratio
+        self.mask_span = mask_span
+
+        self.decoder_channels = list(reversed(self.sizes))
+        self.decoder = ConvSequence(channels=self.decoder_channels, stride=1, decode=True)
+    
+        
+    def pretrain_forward(
+        self,
+        x: torch.Tensor,
+        subject_ids: torch.Tensor | None = None,
+        channel_positions: torch.Tensor | None = None
+        ) -> torch.Tensor:
+
+        x_masked, masker = MEG_mask(x, self.mask_ratio, self.mask_span)
+        x_encoded = super().forward(x_masked)
+
+        out = self.decoder(x_encoded)
+        return (out, x, masker)
 
 
 # ---------------------------------------------------------------------------

@@ -8,6 +8,8 @@ from .augmentations import (
     BandstopFilterFFT,
     BandstopFilterFFTConfig,
     ChannelsDropoutConfig,
+    ContrastiveAugment,
+    ContrastiveSegmentDataset,
     FrequencyShiftConfig,
     GaussianNoiseConfig,
     SmoothTimeMaskConfig,

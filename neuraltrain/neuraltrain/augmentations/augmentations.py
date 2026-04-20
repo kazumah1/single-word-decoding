@@ -32,7 +32,6 @@ def apply_transforms(
             segment_data.data[key] = transforms[key](segment_data.data[key])
     return segment_data
 
-
 def _check_transform_keys_exist(
     transforms: dict[str, tp.Any], features: tp.Mapping[str, tp.Any]
 ) -> None:
@@ -132,6 +131,46 @@ class AugmentedSegmentDataset(SegmentDataset):
         segment_data = super().__getitem__(idx)
         segment_data = apply_transforms(segment_data, self.transforms)
         return segment_data
+
+class ContrastiveAugment(nn.Module):
+    """
+    Light augmentation for contrastive pretraining: random GaussianNoise or ChannelsDropout.
+    Avoids time/frequency augmentations that corrupt word-relevant temporal structure.
+    """
+
+    def __init__(self, sfreq: float = 120.0):
+        super().__init__()
+        self.sfreq = sfreq
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        num_strengths = 16
+        strength = int(torch.randint(0, num_strengths, (1,)).item())
+        transforms = [
+            GaussianNoise(
+                1,
+                std=np.linspace(0.01, 0.3, num=num_strengths)[strength],
+            ),
+            ChannelsDropout(
+                1,
+                p_drop=np.linspace(0.05, 0.4, num=num_strengths)[strength],
+            ),
+        ]
+        i_transform = int(torch.randint(0, len(transforms), (1,)).item())
+        return transforms[i_transform](x)
+
+
+class ContrastiveSegmentDataset(AugmentedSegmentDataset):
+
+    def __getitem__(self, idx: int) -> tuple[SegmentData, SegmentData]:
+        raw = SegmentDataset.__getitem__(self, idx)
+        view_1 = apply_transforms(SegmentData(data=dict(raw.data), segments=raw.segments), self.transforms)
+        view_2 = apply_transforms(SegmentData(data=dict(raw.data), segments=raw.segments), self.transforms)
+        return view_1, view_2
+
+    def collate_fn(self, batch: list[tuple[SegmentData, SegmentData]]) -> tuple[SegmentData, SegmentData]:
+        views1, views2 = zip(*batch)
+        return super().collate_fn(list(views1)), super().collate_fn(list(views2))
+
 
 
 class ChannelsDropoutConfig(pydantic.BaseModel):

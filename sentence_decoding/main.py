@@ -20,6 +20,8 @@ from lightning.pytorch.callbacks import (
     LearningRateMonitor,
     ModelCheckpoint,
 )
+from sentence_decoding.pl_module import BrainModule, SimCLRModule
+from neuraltrain.augmentations import ContrastiveSegmentDataset, ContrastiveAugment
 from sentence_decoding.callbacks import InitialEvaluation, TestRetrieval, TrainingCurves
 from sentence_decoding.pl_module import BrainModule
 from sentence_decoding.utils import (
@@ -43,7 +45,7 @@ torch.backends.cudnn.benchmark = True
 import neuralset as ns
 from neuralset.infra.task import TaskInfra
 from neuralset.splitting import DeterministicSplitter, set_event_split
-from neuraltrain.losses import LossConfig
+from neuraltrain.losses import LossConfig, SigLipLoss
 from neuraltrain.metrics import MetricConfig
 from neuraltrain.models import ModelConfig
 
@@ -183,7 +185,7 @@ class Data(pydantic.BaseModel):
 
         return events
 
-    def get_loaders(self, events):
+    def get_loaders(self, events, pretrain_mode: str = "none"):
         neuro_type = self.neuro.event_type.__name__
 
         if not isinstance(self.feature, ns.features.audio.BaseAudio):  # text
@@ -233,14 +235,25 @@ class Data(pydantic.BaseModel):
                     start=self.start,
                     duration=self.duration,
                 )
-                dataset = ShuffledSegmentDataset(
-                    features,
-                    segments,
-                    remove_incomplete_segments=True,
-                )
-                loaders[split] = DataLoader(
-                    dataset, collate_fn=dataset.collate_fn, **kwargs
-                )
+                if pretrain_mode == "simclr":
+                    dataset = ContrastiveSegmentDataset(
+                        features,
+                        segments,
+                        transforms={"neuro": ContrastiveAugment()},
+                    )
+                    loaders[split] = DataLoader(
+                        dataset, collate_fn=dataset.collate_fn,
+                        **{**kwargs, "shuffle": True}
+                    )
+                else:
+                    dataset = ShuffledSegmentDataset(
+                        features,
+                        segments,
+                        remove_incomplete_segments=True,
+                    )
+                    loaders[split] = DataLoader(
+                        dataset, collate_fn=dataset.collate_fn, **kwargs
+                    )
             else:
                 datasets = []
                 for dataset_name in self.dataset:
@@ -251,11 +264,18 @@ class Data(pydantic.BaseModel):
                         start=self.start,
                         duration=self.duration,
                     )
-                    dataset = ns.SegmentDataset(
-                        features,
-                        segments,
-                        remove_incomplete_segments=True,
-                    )
+                    if pretrain_mode == "simclr":
+                        dataset = ContrastiveSegmentDataset(
+                            features,
+                            segments,
+                            transforms={"neuro": ContrastiveAugment()},
+                        )
+                    else:
+                        dataset = ns.SegmentDataset(
+                            features,
+                            segments,
+                            remove_incomplete_segments=True,
+                        )
                     datasets.append(dataset)
                 loaders[split] = [
                     DataLoader(dataset, collate_fn=dataset.collate_fn, **kwargs)
@@ -264,9 +284,9 @@ class Data(pydantic.BaseModel):
 
         return loaders
 
-    def prepare(self):
+    def prepare(self, pretrain_mode: str = "none"):
         events = self.get_events()
-        loaders = self.get_loaders(events)
+        loaders = self.get_loaders(events, pretrain_mode=pretrain_mode)
         return loaders
 
 
@@ -274,6 +294,9 @@ class Experiment(pydantic.BaseModel):
     """ """
 
     model_config = pydantic.ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
+    pretrain_mode: tp.Literal["none", "simclr"] = "none"
+    pretrain_checkpoint: str | None = None
 
     data: Data
     brain_model_config: ModelConfig
@@ -286,7 +309,7 @@ class Experiment(pydantic.BaseModel):
     retrieval_metrics: list[MetricConfig]
     lm_path: str | None = None
 
-    use_wandb: bool = True
+    use_wandb: bool = False
     save_checkpoints: bool = True
     reload_checkpoint: str | None = None
     cache: str
@@ -317,35 +340,65 @@ class Experiment(pydantic.BaseModel):
                 checkpoint_path = os.path.join(self.infra.folder, "best.ckpt")
             else:
                 checkpoint_path = os.path.join(self.infra.folder, "last.ckpt")
+
+        if self.pretrain_checkpoint and self.pretrain_mode == "none":
+            print(f"\nLoading pretrained encoder weights from {self.pretrain_checkpoint}\n")
+            ckpt = torch.load(self.pretrain_checkpoint, map_location="cpu")
+            model_state = {
+                k[len("model."):]: v
+                for k, v in ckpt["state_dict"].items()
+                if k.startswith("model.")
+            }
+            missing, unexpected = model.load_state_dict(model_state, strict=False)
+            if missing:
+                print(f"Missing keys (will be randomly initialized): {missing}")
+
+        module_cls = SimCLRModule if self.pretrain_mode == "simclr" else BrainModule
+       
         if os.path.exists(checkpoint_path):
             print(f"\nLoading model {checkpoint_path}\n")
-            init_fn = partial(BrainModule.load_from_checkpoint, strict=False)
+            init_fn = partial(module_cls.load_from_checkpoint, strict=False)
         else:
-            init_fn = BrainModule
+            init_fn = module_cls
             checkpoint_path = None
 
-        pl_module = init_fn(
-            checkpoint_path=checkpoint_path,
-            model=model,
-            transformer=transformer,
-            target_scaler=target_scaler,
-            loss=self.loss.build(),
-            metrics={metric.log_name: metric.build() for metric in self.metrics},
-            retrieval_metrics={
-                metric.log_name: metric.build() for metric in self.retrieval_metrics
-            },
-            trainer_config=self.trainer_config,
-        )
+        if self.pretrain_mode == "simclr":
+            pl_module = init_fn(
+                checkpoint_path=checkpoint_path,
+                model=model,
+                loss=SigLipLoss(identical_candidates_threshold=None),
+                trainer_config=self.trainer_config,
+            )
+        else:
+            pl_module = init_fn(
+                checkpoint_path=checkpoint_path,
+                model=model,
+                transformer=transformer,
+                target_scaler=target_scaler,
+                loss=self.loss.build(),
+                metrics={metric.log_name: metric.build() for metric in self.metrics},
+                retrieval_metrics={
+                    metric.log_name: metric.build() for metric in self.retrieval_metrics
+                },
+                trainer_config=self.trainer_config,
+            )
         pl_module.checkpoint_path = checkpoint_path
 
         return pl_module
 
     def get_model(self, train_loader: DataLoader):
         batch = next(iter(train_loader))
-        batch_size, n_in_channels, n_timesteps = batch.data["neuro"].shape
-        n_outputs = batch.data["feature"].shape[1]
-        print("Neuro shape: ", batch.data["neuro"].shape)
-        print("Feature shape: ", batch.data["feature"].shape)
+        if self.pretrain_mode == "simclr":
+            first = batch[0]
+            batch_size, n_in_channels, n_timesteps = first.data["neuro"].shape
+            n_outputs = 1024
+        else:
+            batch_size, n_in_channels, n_timesteps = batch.data["neuro"].shape
+            n_outputs = batch.data["feature"].shape[1]
+       
+        print("Neuro shape: ", (batch[0] if self.pretrain_mode == "simclr" else batch).data["neuro"].shape)
+        if self.pretrain_mode != "simclr":
+            print("Feature shape: ", batch.data["feature"].shape)
         extra_kwargs = {}
 
         brain_model = self.brain_model_config.build(
@@ -366,12 +419,10 @@ class Experiment(pydantic.BaseModel):
     ) -> None:
         brain_model, transformer = self.get_model(train_loader)
 
-        if self.use_target_scaler:
+        if self.use_target_scaler and self.pretrain_mode != "simclr":
             target_scaler = StandardScaler(dim=1)
             for batch in tqdm(train_loader, "Fitting target scaler"):
                 target_scaler.partial_fit(batch.data["feature"])
-                # if target_scaler.n_samples_seen_ > 5e5:
-                #     break
         else:
             target_scaler = None
 
@@ -413,12 +464,12 @@ class Experiment(pydantic.BaseModel):
                     save_last=True,
                     dirpath=self.infra.folder,
                     filename="best",
-                    monitor=self.trainer_config.monitor,
-                    mode="max" if "acc" in self.trainer_config.monitor else "min",
+                    monitor=monitor,
+                    mode=monitor_mode,
                     save_on_train_epoch_end=True,
                 )
             )
-        if self.retrieval_metrics:
+        if self.retrieval_metrics and self.pretrain_mode != "simclr":
             if self.lm_path and Path(self.lm_path).exists():
                 decoder = Decoder(
                     lm_path=lm_path,
@@ -481,7 +532,7 @@ class Experiment(pydantic.BaseModel):
             with open(config_path, "w") as outfile:
                 yaml.dump(self.model_dump(), outfile, indent=4, default_flow_style=False)
 
-        loaders = self.data.prepare()
+        loaders = self.data.prepare(pretrain_mode=self.pretrain_mode)
 
         return loaders
 
@@ -491,6 +542,7 @@ class Experiment(pydantic.BaseModel):
 
         self.fit(loaders["train"], loaders["val"])
 
-        self.test(loaders["test"])
+        if self.pretrain_mode != "simclr":
+            self.test(loaders["test"])
 
         return self._trainer

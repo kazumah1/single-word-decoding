@@ -14,17 +14,17 @@ from .base import BaseModelConfig
 from .biot import BIOT
 from .eegnet import EEGNet, EEGNetConfig
 from .linear import LinearModel, LinearModelConfig
-from .simpleconv import (
+from .multiscaleconv import (
     SimpleConv,
     SimpleConvConfig,
     SimpleConvTimeAgg,
     SimpleConvTimeAggConfig,
-)
-from .multiscaleconv import (
     MultiScaleSimpleConv,
     MultiScaleSimpleConvConfig,
     MultiScaleSimpleConvTimeAgg,
     MultiScaleSimpleConvTimeAggConfig,
+    MultiScaleSimpleConvPretrain,
+    MultiScaleSimpleConvPretrainConfig,
 )
 from .transformer import (
     TransformerEncoder,
