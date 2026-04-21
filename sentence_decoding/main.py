@@ -316,7 +316,7 @@ class Experiment(pydantic.BaseModel):
     lm_path: str | None = None
 
     use_wandb: bool = False
-    save_checkpoints: bool = True
+    save_checkpoints: bool = False
     reload_checkpoint: str | None = None
     cache: str
     project: str
