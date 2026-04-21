@@ -293,9 +293,7 @@ class MultiScaleConvSequence(nn.Module):
         Forwarded verbatim to every ``ConvSequence`` branch.  The keys
         ``dilation_growth`` and ``dilation_period`` are removed/overridden
         internally: ``dilation_growth`` is set per-branch from
-        ``dilation_growths``; ``dilation_period`` is forced to ``None`` so
-        that dilations grow monotonically through the full stack of each
-        branch, maximising receptive-field diversity.
+        ``dilation_growths``;
 
     Notes
     -----
@@ -324,11 +322,11 @@ class MultiScaleConvSequence(nn.Module):
                 "dilation_growths.  For a single scale use ConvSequence directly."
             )
 
-        # Remove the singular dilation_growth if accidentally forwarded, and
-        # force dilation_period=None so each branch's dilations grow without
-        # periodic resets — this maximises per-branch receptive-field reach.
+        # Remove the singular dilation_growth if accidentally forwarded.
+        # Honor the caller's dilation_period: when the widest branch would
+        # otherwise grow past the signal length, the periodic reset keeps the
+        # receptive field inside the window.
         conv_kwargs.pop("dilation_growth", None)
-        conv_kwargs["dilation_period"] = None
 
         self.n_scales: int = len(dilation_growths)
         self.dilation_growths: tp.Tuple[int, ...] = tuple(dilation_growths)
