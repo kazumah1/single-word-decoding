@@ -18,6 +18,22 @@ import torchmetrics
 from torch import nn
 
 
+def _pool_trailing_dims(t: torch.Tensor) -> torch.Tensor:
+    """Collapse trailing (time/sequence) dimensions of a channel-first tensor.
+
+    Retrieval metrics are defined on per-sample embeddings ``[B, F]`` but some
+    encoders (e.g. ``MultiScaleSimpleConvPretrain`` used for SimCLR
+    pretraining) return un-aggregated features ``[B, F, T]`` — or more
+    generally ``[B, F, T, ...]``. Mean-pool every dimension after the feature
+    dim so the downstream einsum gets the expected 2D layout. 2D tensors are
+    returned unchanged.
+    """
+    if t.ndim <= 2:
+        return t
+    reduce_dims = tuple(range(2, t.ndim))
+    return t.mean(dim=reduce_dims)
+
+
 class Rank(torchmetrics.Metric):
     """Rank of predictions based on a retrieval set, using cosine similarity.
 
@@ -52,6 +68,11 @@ class Rank(torchmetrics.Metric):
 
     @classmethod
     def _compute_sim(cls, x, y, norm_kind="y", eps=1e-15):
+        # Accept un-aggregated encoder outputs [B, F, T] (or higher rank) by
+        # mean-pooling the trailing dims down to [B, F] before similarity.
+        x = _pool_trailing_dims(x)
+        y = _pool_trailing_dims(y)
+
         if norm_kind is None:
             eq, inv_norms = "b", torch.ones(x.shape[0])
         elif norm_kind == "x":
