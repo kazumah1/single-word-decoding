@@ -41,7 +41,11 @@ default_params = {
     #}
 default = update_config(default_config, default_params)
 
-params = {"data.dataset": "Gwilliams2022", "pretrain_mode": "simclr"}
+params = {
+    "data.dataset": "Gwilliams2022",
+    "pretrain_mode": "simclr",
+    "trainer_config.monitor": "val_pretrain_cnn_loss",
+}
 
 if __name__ == "__main__":
     config = update_config(default, params)

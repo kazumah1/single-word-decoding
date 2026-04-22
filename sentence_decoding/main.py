@@ -357,6 +357,11 @@ class Experiment(pydantic.BaseModel):
             }
             DROP_PREFIXES = ("merger.", "subject_layers.", "decoder.", "decoder_proj.")
             model_state = {k: v for k, v in model_state.items() if not k.startswith(DROP_PREFIXES)}
+            fine_tune_state = model.state_dict()
+            model_state = {
+                k: v for k, v in model_state.items()
+                if k in fine_tune_state and fine_tune_state[k].shape == v.shape
+            }
             missing, unexpected = model.load_state_dict(model_state, strict=False)
             if missing:
                 print(f"Missing keys (will be randomly initialized): {missing}")
@@ -383,6 +388,13 @@ class Experiment(pydantic.BaseModel):
                 checkpoint_path=checkpoint_path,
                 model=model,
                 loss=SigLipLoss(identical_candidates_threshold=None),
+                trainer_config=self.trainer_config,
+            )
+        elif self.pretrain_mode == "maeeg":
+            pl_module = init_fn(
+                checkpoint_path=checkpoint_path,
+                model=model,
+                loss=nn.MSELoss(),
                 trainer_config=self.trainer_config,
             )
         else:
@@ -475,6 +487,8 @@ class Experiment(pydantic.BaseModel):
             TrainingCurves(config_name=self.config_name),
         ]
         if self.save_checkpoints:
+            monitor = self.trainer_config.monitor
+            monitor_mode = "max" if "acc" in monitor else "min"
             callbacks.append(
                 ModelCheckpoint(
                     save_last=True,
@@ -488,7 +502,7 @@ class Experiment(pydantic.BaseModel):
         if self.retrieval_metrics and self.pretrain_mode != "simclr":
             if self.lm_path and Path(self.lm_path).exists():
                 decoder = Decoder(
-                    lm_path=lm_path,
+                    lm_path=self.lm_path,
                     beam_size=20,
                     max_labels_per_timestep=10,
                     lm_weight=1,
